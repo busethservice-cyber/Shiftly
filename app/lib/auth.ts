@@ -135,6 +135,11 @@ export async function signInWithEmailPassword(email: string, password: string) {
     logSignInFailure(error);
     throw error;
   }
+  // eslint-disable-next-line no-console
+  console.info("[Shiftly][login-debug] signInWithPassword ok", {
+    hasSession: Boolean(data?.session),
+    hasUser: Boolean(data?.user),
+  });
   return data;
 }
 

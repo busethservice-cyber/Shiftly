@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { LoginForm } from "@/app/components/LoginForm";
 
 export default function LoginPage() {
@@ -10,7 +11,9 @@ export default function LoginPage() {
             Bruk e-post og passord for å logge inn i Shiftly.
           </p>
           <div className="mt-6">
-            <LoginForm />
+            <Suspense fallback={<div className="text-[13px] font-medium text-slate-500">Laster innlogging…</div>}>
+              <LoginForm />
+            </Suspense>
           </div>
         </div>
       </div>

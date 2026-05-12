@@ -1,19 +1,31 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { schedulePostLoginBootstrap, signInWithEmailPassword } from "@/app/lib/auth";
+import { safeInternalNext } from "@/app/lib/loginRedirect";
 import { cn } from "@/app/lib/cn";
 import { useInvites } from "@/app/components/InvitesProvider";
 
+function formatSignInError(err: unknown): string {
+  if (err && typeof err === "object" && "message" in err) {
+    const m = (err as { message?: unknown }).message;
+    if (typeof m === "string" && m.trim()) return m.trim();
+  }
+  return "Kunne ikke logge inn";
+}
+
 export function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const { removeInviteByEmail } = useInvites();
   const safetyTimerRef = useRef<number | null>(null);
+
+  const nextPath = safeInternalNext(searchParams.get("next"));
 
   useEffect(() => {
     return () => {
@@ -29,6 +41,17 @@ export function LoginForm() {
     setError(null);
     setLoading(true);
 
+    // eslint-disable-next-line no-console
+    console.info("[Shiftly][login-debug] submit started");
+    // eslint-disable-next-line no-console
+    console.info("[Shiftly][login-debug] email present", Boolean(email.trim()));
+    // eslint-disable-next-line no-console
+    console.info("[Shiftly][login-debug] supabase URL configured", Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL));
+    // eslint-disable-next-line no-console
+    console.info("[Shiftly][login-debug] anon key configured", Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY));
+    // eslint-disable-next-line no-console
+    console.info("[Shiftly][login-debug] next redirect path", nextPath);
+
     if (safetyTimerRef.current != null) {
       clearTimeout(safetyTimerRef.current);
       safetyTimerRef.current = null;
@@ -36,37 +59,61 @@ export function LoginForm() {
     safetyTimerRef.current = window.setTimeout(() => {
       safetyTimerRef.current = null;
       if (typeof window !== "undefined" && window.location.pathname.endsWith("/login")) {
-        console.warn("[Shiftly] login still on /login after 5s; forcing navigation to /oversikt");
-        window.location.assign("/oversikt");
+        console.warn("[Shiftly][login-debug] still on /login after 5s; forcing navigation", { to: nextPath });
+        window.location.assign(nextPath);
       }
       setLoading(false);
     }, 5000);
 
     try {
       const data = await signInWithEmailPassword(email.trim(), password);
+      // eslint-disable-next-line no-console
+      console.info("[Shiftly][login-debug] signIn returned");
+
+      if (!data.session) {
+        // eslint-disable-next-line no-console
+        console.warn("[Shiftly][login-debug] session missing after signIn");
+        if (safetyTimerRef.current != null) {
+          clearTimeout(safetyTimerRef.current);
+          safetyTimerRef.current = null;
+        }
+        setError(
+          "Innloggingen lyktes, men økt (session) ble ikke opprettet. Sjekk at informasjonskapsler er tillatt, eller prøv igjen.",
+        );
+        setLoading(false);
+        return;
+      }
+
+      // eslint-disable-next-line no-console
+      console.info("[Shiftly][login-debug] session exists after signIn", true);
+
       removeInviteByEmail(email.trim());
       schedulePostLoginBootstrap(data.user);
 
+      // eslint-disable-next-line no-console
+      console.info("[Shiftly][login-debug] redirect attempted", { to: nextPath });
       try {
-        router.replace("/oversikt");
+        router.replace(nextPath);
       } catch (navErr) {
-        console.error("[Shiftly] router.replace failed", navErr instanceof Error ? navErr.message : navErr);
-        window.location.assign("/oversikt");
+        console.error("[Shiftly][login-debug] router.replace failed", navErr instanceof Error ? navErr.message : navErr);
+        window.location.assign(nextPath);
       }
 
       window.setTimeout(() => {
         if (typeof window !== "undefined" && window.location.pathname.endsWith("/login")) {
-          console.warn("[Shiftly] still on /login after client navigation; using full page load");
-          window.location.assign("/oversikt");
+          console.warn("[Shiftly][login-debug] still on /login after soft navigation; hard navigating", { to: nextPath });
+          window.location.assign(nextPath);
         }
       }, 400);
     } catch (err) {
+      // eslint-disable-next-line no-console
+      console.info("[Shiftly][login-debug] signIn failed");
+      logSignInFailureClient(err);
       if (safetyTimerRef.current != null) {
         clearTimeout(safetyTimerRef.current);
         safetyTimerRef.current = null;
       }
-      const msg = err instanceof Error ? err.message : "Kunne ikke logge inn";
-      setError(msg);
+      setError(formatSignInError(err));
       setLoading(false);
     }
   }
@@ -117,4 +164,15 @@ export function LoginForm() {
       </button>
     </form>
   );
+}
+
+function logSignInFailureClient(err: unknown): void {
+  if (err && typeof err === "object" && "message" in err) {
+    const code = "code" in err && typeof (err as { code?: unknown }).code === "string" ? (err as { code: string }).code : undefined;
+    // eslint-disable-next-line no-console
+    console.info("[Shiftly][login-debug] signIn error detail", code ? { code, message: String((err as { message?: unknown }).message) } : { message: String((err as { message?: unknown }).message) });
+    return;
+  }
+  // eslint-disable-next-line no-console
+  console.info("[Shiftly][login-debug] signIn error detail", err);
 }
