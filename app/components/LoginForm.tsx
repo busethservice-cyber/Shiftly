@@ -1,11 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { signIn } from "@/app/lib/auth";
 import { cn } from "@/app/lib/cn";
 import { useInvites } from "@/app/components/InvitesProvider";
 
 export function LoginForm() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -19,11 +21,10 @@ export function LoginForm() {
     try {
       await signIn(email.trim(), password);
       removeInviteByEmail(email.trim());
-      window.location.href = "/";
+      router.replace("/oversikt");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Kunne ikke logge inn";
       setError(msg);
-    } finally {
       setLoading(false);
     }
   }
@@ -70,7 +71,7 @@ export function LoginForm() {
           loading && "opacity-60 hover:bg-violet-600",
         )}
       >
-        Logg inn
+        {loading ? "Logger inn…" : "Logg inn"}
       </button>
     </form>
   );

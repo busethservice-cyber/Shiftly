@@ -2,11 +2,10 @@
 
 import { cn } from "@/app/lib/cn";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { useMockData } from "@/app/lib/runtimeConfig";
-import { getUserRole } from "@/app/lib/auth";
-import { signOut } from "@/app/lib/auth";
+import { getCurrentUserProfile, getUserRole, signOut } from "@/app/lib/auth";
 import { useAlerts } from "@/app/components/AlertsProvider";
 import {
   BarChart3,
@@ -18,12 +17,22 @@ import {
   Users,
 } from "lucide-react";
 
+function initialsFromDisplayName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed || trimmed === "…") return "?";
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    const a = parts[0]![0];
+    const b = parts[1]![0];
+    return `${a ?? ""}${b ?? ""}`.toUpperCase() || "?";
+  }
+  const one = parts[0] ?? trimmed;
+  if (one.length >= 2) return `${one[0]!}${one[1]!}`.toUpperCase();
+  return (one[0] ?? "?").toUpperCase();
+}
+
 function Avatar({ name, gradient }: { name: string; gradient: string }) {
-  const initials = name
-    .split(" ")
-    .slice(0, 2)
-    .map((p) => p[0]?.toUpperCase())
-    .join("");
+  const initials = initialsFromDisplayName(name);
 
   return (
     <div
@@ -56,14 +65,25 @@ export function Sidebar({
   onOpenAlerts: () => void;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { alertCount, alertsHydrated } = useAlerts();
   const [mounted, setMounted] = useState(false);
   const [role, setRole] = useState<"admin" | "employee">("admin");
+  const [profileCard, setProfileCard] = useState<{ displayName: string; roleLabel: string; gradient: string } | null>(
+    null,
+  );
 
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
-    if (useMockData) return;
+    if (useMockData) {
+      setProfileCard({
+        displayName: "Demonstrasjon",
+        roleLabel: "Administrator",
+        gradient: "from-slate-200 to-slate-100",
+      });
+      return;
+    }
     let alive = true;
     getUserRole()
       .then((r) => {
@@ -72,6 +92,14 @@ export function Sidebar({
       })
       .catch((err) => {
         console.error("Failed to load role for sidebar.", err);
+      });
+    getCurrentUserProfile()
+      .then((p) => {
+        if (!alive || !p) return;
+        setProfileCard({ displayName: p.displayName, roleLabel: p.roleLabel, gradient: p.gradient });
+      })
+      .catch((err) => {
+        console.error("Failed to load user profile for sidebar.", err);
       });
     return () => {
       alive = false;
@@ -149,10 +177,15 @@ export function Sidebar({
         <div className="mt-auto px-1">
           <div className="rounded-3xl bg-white p-3 shadow-[0_16px_32px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.04]">
             <div className="flex items-center gap-3">
-              <Avatar name="Kari Nordahl" gradient="from-amber-200 to-rose-200" />
+              <Avatar
+                name={profileCard?.displayName ?? "…"}
+                gradient={profileCard?.gradient ?? "from-slate-200 to-slate-100"}
+              />
               <div className="min-w-0">
-                <div className="truncate text-[13.5px] font-semibold text-slate-900">Kari Nordahl</div>
-                <div className="text-[12px] text-slate-500">Administrator</div>
+                <div className="truncate text-[13.5px] font-semibold text-slate-900">
+                  {profileCard?.displayName ?? "Laster…"}
+                </div>
+                <div className="truncate text-[12px] text-slate-500">{profileCard?.roleLabel ?? "…"}</div>
               </div>
             </div>
 
@@ -163,9 +196,8 @@ export function Sidebar({
                   await signOut();
                 } catch (err) {
                   console.error("Failed to sign out.", err);
-                } finally {
-                  window.location.href = "/login";
                 }
+                router.replace("/login");
               }}
               className="mt-3 w-full rounded-2xl bg-white/70 px-4 py-2.5 text-[13px] font-semibold text-slate-700 shadow-[0_12px_24px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.05] hover:bg-white"
             >
