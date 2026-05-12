@@ -118,68 +118,89 @@ export async function getUserRole(): Promise<"admin" | "employee"> {
   return data?.role === "admin" ? "admin" : "employee";
 }
 
-export async function signIn(email: string, password: string) {
+function logSignInFailure(err: unknown): void {
+  if (err && typeof err === "object" && "message" in err) {
+    const code = "code" in err && typeof (err as { code?: unknown }).code === "string" ? (err as { code: string }).code : undefined;
+    console.error("[Shiftly] sign-in failed", code ? { code, message: String((err as { message?: unknown }).message) } : { message: String((err as { message?: unknown }).message) });
+    return;
+  }
+  console.error("[Shiftly] sign-in failed", err);
+}
+
+/** Only Supabase password auth — fast return for UI redirect. Do not await bootstrap in the same turn. */
+export async function signInWithEmailPassword(email: string, password: string) {
   const supabase = getSupabaseClient();
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) throw error;
+  if (error) {
+    logSignInFailure(error);
+    throw error;
+  }
+  return data;
+}
 
-  // First-login bootstrap: create org row keyed by user.id
-  const user = data.user;
-  if (user) {
-    const { error: orgError } = await supabase
-      .from("organizations")
-      .upsert([{ id: user.id, name: (user.email ?? "Organisasjon").slice(0, 120) }], { onConflict: "id" });
-    if (orgError) {
-      // Don't block login if org bootstrap fails.
-      console.error("Failed to ensure organization row on login.", orgError);
-    }
+/** Org + employee seed + invite link — run after redirect; must not block login navigation. */
+export async function runPostLoginBootstrap(user: User): Promise<void> {
+  const supabase = getSupabaseClient();
 
-    // First logged-in user = admin (create employee row if missing)
-    const { data: existing, error: existingError } = await supabase
-      .from("employees")
-      .select("id")
-      .eq("organization_id", user.id)
-      .limit(1);
-    if (existingError) {
-      console.error("Failed to check existing employees on login.", existingError);
-    } else if ((existing ?? []).length === 0) {
-      const seedName = displayNameFromAuthUser(user);
-      const { error: seedError } = await supabase.from("employees").insert([
-        {
-          organization_id: user.id,
-          store_id: null,
-          user_id: user.id,
-          role: "admin",
-          name: seedName,
-          position_percent: 100,
-          contract_hours: 37.5,
-          is_active: true,
-        },
-      ]);
-      if (seedError) console.error("Failed to seed admin employee on first login.", seedError);
-    }
+  const { error: orgError } = await supabase
+    .from("organizations")
+    .upsert([{ id: user.id, name: (user.email ?? "Organisasjon").slice(0, 120) }], { onConflict: "id" });
+  if (orgError) {
+    console.error("[Shiftly] organization bootstrap failed", { message: orgError.message, code: orgError.code });
+  }
 
-    // Invite acceptance (simplified): if there's an employee whose name equals user email and no user_id, link it.
-    const userEmail = (user.email ?? "").trim().toLowerCase();
-    if (userEmail) {
-      const { data: match, error: matchError } = await supabase
-        .from("employees")
-        .select("id")
-        .eq("organization_id", user.id)
-        .eq("is_active", true)
-        .ilike("name", userEmail)
-        .is("user_id", null)
-        .maybeSingle();
-      if (matchError) {
-        console.error("Failed to check invite match on login.", matchError);
-      } else if (match?.id) {
-        const { error: linkError } = await supabase.from("employees").update({ user_id: user.id }).eq("id", match.id);
-        if (linkError) console.error("Failed to link invited employee on login.", linkError);
-      }
+  const { data: existing, error: existingError } = await supabase
+    .from("employees")
+    .select("id")
+    .eq("organization_id", user.id)
+    .limit(1);
+  if (existingError) {
+    console.error("[Shiftly] employee count check failed", { message: existingError.message, code: existingError.code });
+  } else if ((existing ?? []).length === 0) {
+    const seedName = displayNameFromAuthUser(user);
+    const { error: seedError } = await supabase.from("employees").insert([
+      {
+        organization_id: user.id,
+        store_id: null,
+        user_id: user.id,
+        role: "admin",
+        name: seedName,
+        position_percent: 100,
+        contract_hours: 37.5,
+        is_active: true,
+      },
+    ]);
+    if (seedError) {
+      console.error("[Shiftly] admin employee seed failed", { message: seedError.message, code: seedError.code });
     }
   }
 
-  return data;
+  const userEmail = (user.email ?? "").trim().toLowerCase();
+  if (!userEmail) return;
+
+  const { data: match, error: matchError } = await supabase
+    .from("employees")
+    .select("id")
+    .eq("organization_id", user.id)
+    .eq("is_active", true)
+    .ilike("name", userEmail)
+    .is("user_id", null)
+    .maybeSingle();
+  if (matchError) {
+    console.error("[Shiftly] invite match check failed", { message: matchError.message, code: matchError.code });
+  } else if (match?.id) {
+    const { error: linkError } = await supabase.from("employees").update({ user_id: user.id }).eq("id", match.id);
+    if (linkError) {
+      console.error("[Shiftly] invite link failed", { message: linkError.message, code: linkError.code });
+    }
+  }
+}
+
+export function schedulePostLoginBootstrap(user: User | null | undefined): void {
+  if (!user) return;
+  void runPostLoginBootstrap(user).catch((e) => {
+    console.error("[Shiftly] post-login bootstrap error", e instanceof Error ? e.message : e);
+  });
 }
 
 export async function signOut() {

@@ -38,19 +38,25 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Role gating: employees are redirected to /ansattportal
   const { data: roleRow, error: roleError } = await supabase
     .from("employees")
     .select("role")
     .eq("user_id", data.user.id)
     .eq("is_active", true)
     .maybeSingle();
+
+  // Role gating: employees are redirected to /ansattportal.
+  // No employee row yet (bootstrap still running) → treat as admin so /oversikt and admin UI load.
+  let role: "admin" | "employee" = "admin";
   if (roleError) {
-    // Keep it safe: if we can't check role, treat as employee.
     console.error("Failed to check role in middleware.", roleError);
+    role = "admin";
+  } else if (roleRow?.role === "employee") {
+    role = "employee";
+  } else if (roleRow?.role === "admin") {
+    role = "admin";
   }
 
-  const role = roleRow?.role === "admin" ? "admin" : "employee";
   if (role === "employee" && !pathname.startsWith("/ansattportal")) {
     const url = req.nextUrl.clone();
     url.pathname = "/ansattportal";

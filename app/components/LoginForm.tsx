@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { signIn } from "@/app/lib/auth";
+import { schedulePostLoginBootstrap, signInWithEmailPassword } from "@/app/lib/auth";
 import { cn } from "@/app/lib/cn";
 import { useInvites } from "@/app/components/InvitesProvider";
 
@@ -13,16 +13,58 @@ export function LoginForm() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const { removeInviteByEmail } = useInvites();
+  const safetyTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (safetyTimerRef.current != null) {
+        clearTimeout(safetyTimerRef.current);
+        safetyTimerRef.current = null;
+      }
+    };
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
+
+    if (safetyTimerRef.current != null) {
+      clearTimeout(safetyTimerRef.current);
+      safetyTimerRef.current = null;
+    }
+    safetyTimerRef.current = window.setTimeout(() => {
+      safetyTimerRef.current = null;
+      if (typeof window !== "undefined" && window.location.pathname.endsWith("/login")) {
+        console.warn("[Shiftly] login still on /login after 5s; forcing navigation to /oversikt");
+        window.location.assign("/oversikt");
+      }
+      setLoading(false);
+    }, 5000);
+
     try {
-      await signIn(email.trim(), password);
+      const data = await signInWithEmailPassword(email.trim(), password);
       removeInviteByEmail(email.trim());
-      router.replace("/oversikt");
+      schedulePostLoginBootstrap(data.user);
+
+      try {
+        router.replace("/oversikt");
+      } catch (navErr) {
+        console.error("[Shiftly] router.replace failed", navErr instanceof Error ? navErr.message : navErr);
+        window.location.assign("/oversikt");
+      }
+
+      window.setTimeout(() => {
+        if (typeof window !== "undefined" && window.location.pathname.endsWith("/login")) {
+          console.warn("[Shiftly] still on /login after client navigation; using full page load");
+          window.location.assign("/oversikt");
+        }
+      }, 400);
     } catch (err) {
+      if (safetyTimerRef.current != null) {
+        clearTimeout(safetyTimerRef.current);
+        safetyTimerRef.current = null;
+      }
       const msg = err instanceof Error ? err.message : "Kunne ikke logge inn";
       setError(msg);
       setLoading(false);
@@ -76,4 +118,3 @@ export function LoginForm() {
     </form>
   );
 }
-
