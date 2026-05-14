@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { EmployeeRequestType, Shift, ShiftStatus } from "@/app/lib/types";
 import { useWorkforce } from "@/app/components/WorkforceProvider";
 import { useRequests } from "@/app/components/RequestsProvider";
@@ -9,6 +11,7 @@ import { cn } from "@/app/lib/cn";
 import { shiftDurationHours } from "@/app/lib/hours";
 import { RequestModal } from "@/app/components/RequestModal";
 import { makeId } from "@/app/lib/mockData";
+import { getUserRole, signOut } from "@/app/lib/auth";
 
 function statusPill(status: ShiftStatus) {
   if (status === "over_limit") return "bg-rose-50 text-rose-800 ring-rose-100";
@@ -48,10 +51,28 @@ function storeLabel(store: string) {
 }
 
 export function AnsattportalClient() {
+  const router = useRouter();
   const { employees, shifts } = useWorkforce();
   const { setRequests } = useRequests();
   const [employeeId, setEmployeeId] = useState<string>(() => employees[0]?.id ?? "");
   const [requestType, setRequestType] = useState<EmployeeRequestType | null>(null);
+  const [canAccessAdmin, setCanAccessAdmin] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    getUserRole()
+      .then((r) => {
+        if (!alive) return;
+        setCanAccessAdmin(r === "admin");
+      })
+      .catch(() => {
+        if (!alive) return;
+        setCanAccessAdmin(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const employee = useMemo(() => employees.find((e) => e.id === employeeId) ?? null, [employees, employeeId]);
 
@@ -89,10 +110,42 @@ export function AnsattportalClient() {
     <div className="min-h-screen w-full bg-[#F3F6FB] text-slate-900">
       <div className="mx-auto w-full max-w-[560px] px-4 py-6 sm:px-6">
         <header className="rounded-[28px] bg-white/80 p-5 shadow-[0_18px_40px_rgba(15,23,42,0.08)] ring-1 ring-slate-900/[0.04] backdrop-blur">
-          <div className="text-[24px] font-semibold tracking-tight text-slate-900">Mine vakter</div>
-          <p className="mt-2 text-[13px] font-medium text-slate-600">
-            Velg ansatt for demo. Du ser kun <span className="font-semibold text-slate-800">publiserte</span> vakter.
-          </p>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-[24px] font-semibold tracking-tight text-slate-900">Mine vakter</div>
+              <p className="mt-2 text-[13px] font-medium text-slate-600">
+                Velg ansatt for demo. Du ser kun <span className="font-semibold text-slate-800">publiserte</span> vakter.
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              {canAccessAdmin ? (
+                <Link
+                  href="/oversikt"
+                  className="rounded-2xl bg-violet-600 px-4 py-2.5 text-[13px] font-semibold text-white shadow-[0_12px_24px_rgba(124,58,237,0.25)] ring-1 ring-violet-500/30 hover:bg-violet-500"
+                >
+                  Til adminpanel
+                </Link>
+              ) : null}
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await signOut();
+                  } catch (err) {
+                    console.error("Sign out failed", err);
+                  }
+                  try {
+                    router.replace("/login");
+                  } catch {
+                    window.location.assign("/login");
+                  }
+                }}
+                className="rounded-2xl bg-white/90 px-4 py-2.5 text-[13px] font-semibold text-slate-700 shadow-[0_10px_22px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.08] hover:bg-white"
+              >
+                Logg ut
+              </button>
+            </div>
+          </div>
 
           <div className="mt-4">
             <label className="text-[12px] font-semibold text-slate-600">Ansatt</label>

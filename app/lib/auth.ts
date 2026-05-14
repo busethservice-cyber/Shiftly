@@ -1,6 +1,7 @@
 "use client";
 
 import type { User } from "@supabase/supabase-js";
+import { effectiveRoleFromEmployeeRows } from "@/app/lib/effectiveUserRole";
 import { getSupabaseClient } from "@/app/lib/supabaseClient";
 
 const PROFILE_GRADIENTS = [
@@ -55,21 +56,23 @@ export async function getCurrentUserProfile(): Promise<CurrentUserProfile | null
   if (!user) return null;
 
   const supabase = getSupabaseClient();
-  const { data: emp, error } = await supabase
+  const { data: empRows, error } = await supabase
     .from("employees")
     .select("name, role")
     .eq("user_id", user.id)
-    .eq("is_active", true)
-    .maybeSingle();
+    .eq("is_active", true);
 
   if (error) {
     console.error("Failed to fetch employee profile for current user.", error);
   }
 
+  const list = empRows ?? [];
+  const emp = list.find((e) => e.role === "admin") ?? list[0] ?? null;
+
   const gradient = pickProfileGradient(user.id);
 
   if (emp?.name) {
-    const roleKey = emp.role === "admin" ? "admin" : "employee";
+    const roleKey = effectiveRoleFromEmployeeRows(list);
     return {
       displayName: emp.name,
       roleKey,
@@ -100,22 +103,21 @@ export async function getCurrentOrganizationId() {
 }
 
 export async function getUserRole(): Promise<"admin" | "employee"> {
-  // Simplified: role comes from an employee row linked to this user.
   const user = await getCurrentUser();
   if (!user) return "employee";
 
   const supabase = getSupabaseClient();
-  const { data, error } = await supabase
+  const { data: rows, error } = await supabase
     .from("employees")
     .select("role")
     .eq("user_id", user.id)
-    .eq("is_active", true)
-    .maybeSingle();
+    .eq("is_active", true);
   if (error) {
     console.error("Failed to fetch user role.", error);
-    return "employee";
+    // Prefer admin on read errors so admins are not trapped in the employee portal.
+    return "admin";
   }
-  return data?.role === "admin" ? "admin" : "employee";
+  return effectiveRoleFromEmployeeRows(rows);
 }
 
 function logSignInFailure(err: unknown): void {
@@ -135,7 +137,6 @@ export async function signInWithEmailPassword(email: string, password: string) {
     logSignInFailure(error);
     throw error;
   }
-  // eslint-disable-next-line no-console
   console.info("[Shiftly][login-debug] signInWithPassword ok", {
     hasSession: Boolean(data?.session),
     hasUser: Boolean(data?.user),
@@ -208,9 +209,24 @@ export function schedulePostLoginBootstrap(user: User | null | undefined): void 
   });
 }
 
+/** Clears Shiftly app caches in the browser (not Supabase cookies). */
+export function clearShiftlyBrowserCaches(): void {
+  if (typeof window === "undefined") return;
+  for (const storage of [localStorage, sessionStorage]) {
+    const toRemove: string[] = [];
+    for (let i = 0; i < storage.length; i++) {
+      const k = storage.key(i);
+      if (!k) continue;
+      if (k.startsWith("shiftly:") || k.startsWith("shiftly.")) toRemove.push(k);
+    }
+    for (const k of toRemove) storage.removeItem(k);
+  }
+}
+
 export async function signOut() {
   const supabase = getSupabaseClient();
   const { error } = await supabase.auth.signOut();
   if (error) throw error;
+  clearShiftlyBrowserCaches();
 }
 
