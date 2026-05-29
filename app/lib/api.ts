@@ -1,7 +1,7 @@
 "use client";
 
-import type { DbAvailabilityPeriod, DbEmployee, DbRequest, DbShift, DbStore } from "@/app/lib/dbTypes";
-import type { Employee, EmployeeRequest, RecurringUnavailablePeriod, RetailStore, Shift, UnavailablePeriodReason } from "@/app/lib/types";
+import type { DbAvailabilityPeriod, DbEmployee, DbRecurringAvailabilityPeriod, DbRequest, DbShift, DbStore } from "@/app/lib/dbTypes";
+import type { Employee, EmployeeRequest, RecurringUnavailablePeriod, RetailStore, Shift } from "@/app/lib/types";
 import { getSupabaseClient } from "@/app/lib/supabaseClient";
 import { initialEmployees, initialShifts } from "@/app/lib/mockData";
 import { initialRetailStores } from "@/app/lib/storesData";
@@ -9,6 +9,14 @@ import { makeId, baseWeekStart, addDays } from "@/app/lib/mockData";
 import { useMockData } from "@/app/lib/runtimeConfig";
 import { getCurrentOrganizationId } from "@/app/lib/auth";
 import { normalizeEmployeeStoreAssignments } from "@/app/lib/employeeStoreMigration";
+import {
+  dbRowToRecurring,
+  dbRowsToUnavailablePeriods,
+  hmToDbTime,
+  parseDbTimeToHm,
+  recurringToDbRow,
+  unavailablePeriodToDbRows,
+} from "@/app/lib/availabilityPersistence";
 
 const LS_KEYS = {
   employees: "shiftly:mock:employees",
@@ -58,33 +66,6 @@ function logEmployees(phase: string, detail: Record<string, unknown>) {
 
 function sanitizeStoreIdForDb(storeId: string | null | undefined): string | null {
   return isUuid(storeId) ? storeId! : null;
-}
-
-function reasonToDb(r: UnavailablePeriodReason): DbAvailabilityPeriod["reason"] {
-  if (r === "Syk") return "syk";
-  if (r === "Fri") return "fri";
-  return "annet";
-}
-
-function normalizeIsoDate(s: string) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s ?? "").trim());
-  if (!m) return null;
-  return `${m[1]}-${m[2]}-${m[3]}`;
-}
-
-function expandIsoRangeInclusive(startIso: string, endIso: string) {
-  const a = normalizeIsoDate(startIso);
-  const b = normalizeIsoDate(endIso);
-  if (!a || !b) return [];
-  const start = new Date(`${a}T00:00:00`);
-  const end = new Date(`${b}T00:00:00`);
-  const out: string[] = [];
-  const d = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-  while (d.getTime() <= end.getTime()) {
-    out.push(toIsoDate(d));
-    d.setDate(d.getDate() + 1);
-  }
-  return out;
 }
 
 function toIsoDate(d: Date) {
@@ -152,20 +133,6 @@ async function persistSupabaseEmployeeStoreNormalization(args: {
   if (cacheDirty) writeEmployeeStoresCache(cache);
 }
 
-function parseDbTimeToHm(t: string) {
-  // Accept "HH:mm:ss" or "HH:mm"
-  if (!t) return "";
-  const [hh, mm] = t.split(":");
-  if (!hh || !mm) return t;
-  return `${hh.padStart(2, "0")}:${mm.padStart(2, "0")}`;
-}
-
-function hmToDbTime(hm: string) {
-  if (!hm) return "00:00:00";
-  const [hh, mm] = hm.split(":");
-  return `${String(hh ?? "00").padStart(2, "0")}:${String(mm ?? "00").padStart(2, "0")}:00`;
-}
-
 function diffDays(a: Date, b: Date) {
   const ms = 24 * 60 * 60 * 1000;
   const aa = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
@@ -175,12 +142,6 @@ function diffDays(a: Date, b: Date) {
 
 function dateFromWeekDay(week: number, day: number) {
   return addDays(baseWeekStart, week * 7 + day);
-}
-
-function reasonToUi(r: DbAvailabilityPeriod["reason"]): UnavailablePeriodReason {
-  if (r === "syk") return "Syk";
-  if (r === "fri") return "Fri";
-  return "Annet";
 }
 
 function requestTypeToUi(t: DbRequest["type"]): EmployeeRequest["type"] {
@@ -322,17 +283,35 @@ export async function getEmployees(): Promise<Employee[]> {
     periodsByEmployee.set(p.employee_id, list);
   }
 
+  let recurringByEmployee = new Map<string, DbRecurringAvailabilityPeriod[]>();
+  if (employeeIds.length > 0) {
+    const { data: recurringData, error: recurringError } = await supabase
+      .from("recurring_availability_periods")
+      .select("*")
+      .in("employee_id", employeeIds);
+    if (recurringError) {
+      logEmployees("recurring load warning", { message: recurringError.message, code: recurringError.code });
+    } else {
+      for (const r of (recurringData ?? []) as DbRecurringAvailabilityPeriod[]) {
+        const list = recurringByEmployee.get(r.employee_id) ?? [];
+        list.push(r);
+        recurringByEmployee.set(r.employee_id, list);
+      }
+    }
+  }
+
   const unavailableDaysCache = lsReadJson<Record<string, number[]>>(LS_KEYS.employeeUnavailableDays) ?? {};
   const storesCache = readEmployeeStoresCache();
   const recurringCache = readEmployeeRecurringUnavailableCache();
 
   const normalized = dbEmployees.map((e) => {
-    const periods = (periodsByEmployee.get(e.id) ?? []).map((p) => ({
-      id: p.id,
-      startDate: p.date,
-      endDate: p.date,
-      reason: reasonToUi(p.reason),
-    }));
+    const dbRows = periodsByEmployee.get(e.id) ?? [];
+    const periods = dbRowsToUnavailablePeriods(dbRows);
+    const dbRecurring = recurringByEmployee.get(e.id);
+    const recurring =
+      dbRecurring && dbRecurring.length > 0
+        ? dbRecurring.map(dbRowToRecurring)
+        : recurringCache[e.id] ?? [];
 
     const primaryStoreId = e.store_id ?? null;
     const primaryStore = (primaryStoreId ? storeById.get(primaryStoreId)?.employeeSiteKey ?? null : null) as
@@ -351,7 +330,7 @@ export async function getEmployees(): Promise<Employee[]> {
       contractHours: e.contract_hours,
       unavailableDays: unavailableDaysCache[e.id] ?? [],
       unavailablePeriods: periods,
-      recurringUnavailablePeriods: recurringCache[e.id] ?? [],
+      recurringUnavailablePeriods: recurring,
       primaryStoreId,
       storeIds,
       primaryStore,
@@ -504,12 +483,6 @@ export async function updateEmployee(updated: Employee): Promise<void> {
     [updated.id]: { storeIds: updated.storeIds ?? [], primaryStoreId: updated.primaryStoreId ?? null },
   });
 
-  // MVP fallback: recurring weekly unavailability stored in localStorage until schema supports it.
-  writeEmployeeRecurringUnavailableCache({
-    ...readEmployeeRecurringUnavailableCache(),
-    [updated.id]: updated.recurringUnavailablePeriods ?? [],
-  });
-
   // Weekday blocks: stored as local cache (no DB column in current schema).
   lsWriteJson(LS_KEYS.employeeUnavailableDays, {
     ...(lsReadJson<Record<string, number[]>>(LS_KEYS.employeeUnavailableDays) ?? {}),
@@ -517,6 +490,7 @@ export async function updateEmployee(updated: Employee): Promise<void> {
   });
 
   await upsertAvailabilityPeriods(updated.id, updated.unavailablePeriods ?? []);
+  await upsertRecurringAvailabilityPeriods(updated.id, updated.recurringUnavailablePeriods ?? []);
 }
 
 export async function createEmployee(next: Employee): Promise<void> {
@@ -567,18 +541,13 @@ export async function createEmployee(next: Employee): Promise<void> {
     [row.id]: { storeIds: next.storeIds ?? [], primaryStoreId: next.primaryStoreId ?? null },
   });
 
-  // MVP fallback: recurring weekly unavailability stored in localStorage until schema supports it.
-  writeEmployeeRecurringUnavailableCache({
-    ...readEmployeeRecurringUnavailableCache(),
-    [row.id]: next.recurringUnavailablePeriods ?? [],
-  });
-
   lsWriteJson(LS_KEYS.employeeUnavailableDays, {
     ...(lsReadJson<Record<string, number[]>>(LS_KEYS.employeeUnavailableDays) ?? {}),
     [row.id]: next.unavailableDays ?? [],
   });
   try {
     await upsertAvailabilityPeriods(row.id, next.unavailablePeriods ?? []);
+    await upsertRecurringAvailabilityPeriods(row.id, next.recurringUnavailablePeriods ?? []);
   } catch (availErr) {
     const msg = availErr instanceof Error ? availErr.message : String(availErr);
     logEmployees("create availability warning", { employee_id: row.id, message: msg });
@@ -607,6 +576,7 @@ export async function deleteEmployee(employeeId: string): Promise<void> {
   if (error) throw error;
 
   await supabase.from("availability_periods").delete().eq("employee_id", employeeId);
+  await supabase.from("recurring_availability_periods").delete().eq("employee_id", employeeId);
 }
 
 export async function upsertAvailabilityPeriods(employeeId: string, periods: Employee["unavailablePeriods"]): Promise<void> {
@@ -618,20 +588,42 @@ export async function upsertAvailabilityPeriods(employeeId: string, periods: Emp
 
   const rows: DbAvailabilityPeriod[] = [];
   for (const p of periods ?? []) {
-    const days = expandIsoRangeInclusive(p.startDate, p.endDate);
-    for (const iso of days) {
-      rows.push({
-        id: makeId(),
-        employee_id: employeeId,
-        date: iso,
-        reason: reasonToDb(p.reason),
-      });
-    }
+    rows.push(...unavailablePeriodToDbRows(employeeId, p));
   }
 
   if (rows.length === 0) return;
   const { error } = await supabase.from("availability_periods").insert(rows);
   if (error) throw error;
+}
+
+export async function upsertRecurringAvailabilityPeriods(
+  employeeId: string,
+  periods: Employee["recurringUnavailablePeriods"],
+): Promise<void> {
+  if (useMockData) return;
+  const supabase = getSupabaseClient();
+
+  const { error: delErr } = await supabase.from("recurring_availability_periods").delete().eq("employee_id", employeeId);
+  if (delErr) {
+    logEmployees("recurring upsert warning", { employee_id: employeeId, message: delErr.message, code: delErr.code });
+    writeEmployeeRecurringUnavailableCache({
+      ...readEmployeeRecurringUnavailableCache(),
+      [employeeId]: periods ?? [],
+    });
+    return;
+  }
+
+  const rows = (periods ?? []).map((p) => recurringToDbRow(employeeId, p));
+  if (rows.length === 0) return;
+  const { error } = await supabase.from("recurring_availability_periods").insert(rows);
+  if (error) {
+    logEmployees("recurring upsert warning", { employee_id: employeeId, message: error.message, code: error.code });
+    writeEmployeeRecurringUnavailableCache({
+      ...readEmployeeRecurringUnavailableCache(),
+      [employeeId]: periods ?? [],
+    });
+    throw error;
+  }
 }
 
 export async function getRequests(): Promise<EmployeeRequest[]> {

@@ -41,13 +41,29 @@ export type DbShift = {
   status: DbShiftStatus;
 };
 
-export type DbAvailabilityReason = "fri" | "syk" | "annet";
+export type DbAvailabilityReason = "fri" | "ferie" | "syk" | "skole" | "annet";
 
 export type DbAvailabilityPeriod = {
   id: DbUuid;
   employee_id: DbUuid;
   date: DbDate;
   reason: DbAvailabilityReason;
+  start_time: DbTime | null;
+  end_time: DbTime | null;
+  note: string | null;
+  period_group_id: DbUuid | null;
+};
+
+export type DbRecurringAvailabilityPeriod = {
+  id: DbUuid;
+  employee_id: DbUuid;
+  weekday: number;
+  start_time: DbTime | null;
+  end_time: DbTime | null;
+  reason: string | null;
+  valid_from: DbDate | null;
+  valid_to: DbDate | null;
+  note: string | null;
 };
 
 export type DbRequestType = "fri" | "bytt" | "syk";

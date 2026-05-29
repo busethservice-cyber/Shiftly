@@ -18,6 +18,7 @@ import { InviteEmployeeModal } from "@/app/components/InviteEmployeeModal";
 import { useInvites } from "@/app/components/InvitesProvider";
 import { activeStores } from "@/app/lib/storeUtils";
 import { employeeStoreLabel } from "@/app/lib/employeeStoreLabel";
+import { StatusToast, useStatusToast } from "@/app/components/StatusToast";
 
 const FILTER_ALLE = "alle";
 const FILTER_UTIL = "utilgjengelig";
@@ -133,6 +134,7 @@ export function AnsatteClient() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [persistError, setPersistError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const { toast, showToast } = useStatusToast();
 
   const selectedEmployee = useMemo(
     () => (selectedEmployeeId ? employees.find((e) => e.id === selectedEmployeeId) ?? null : null),
@@ -190,6 +192,7 @@ export function AnsatteClient() {
       await createEmployee(next);
       setSelectedEmployeeId(id);
       setPanelOpen(true);
+      showToast("Ansatt lagret");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Kunne ikke opprette ansatt i databasen";
       setPersistError(msg);
@@ -206,6 +209,7 @@ export function AnsatteClient() {
       setShifts((prev) => prev.filter((s) => s.employeeId !== employeeId));
       setPanelOpen(false);
       setSelectedEmployeeId(null);
+      showToast("Ansatt slettet");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Kunne ikke slette ansatt";
       setPersistError(msg);
@@ -304,6 +308,12 @@ export function AnsatteClient() {
               </button>
             </div>
 
+            <p className="mt-3 px-1 text-[12.5px] font-semibold text-slate-600">
+              {filtered.length === employees.length
+                ? `${employees.length} ansatte`
+                : `Viser ${filtered.length} av ${employees.length} ansatte`}
+            </p>
+
             <div className="mt-4 space-y-3">
               {filtered.length === 0 ? (
                 <div className="rounded-[28px] bg-white/70 p-4 text-[13px] font-semibold text-slate-600 shadow-[0_14px_30px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.05]">
@@ -363,6 +373,7 @@ export function AnsatteClient() {
           setSaving(true);
           try {
             await updateEmployee(updated);
+            showToast("Endringer lagret");
           } catch (err) {
             const msg = err instanceof Error ? err.message : "Kunne ikke lagre ansatt";
             setPersistError(msg);
@@ -413,6 +424,7 @@ export function AnsatteClient() {
           try {
             await createEmployee(next);
             setInviteOpen(false);
+            showToast("Ansatt lagret");
           } catch (err) {
             const msg = err instanceof Error ? err.message : "Kunne ikke opprette invitert ansatt";
             setPersistError(msg);
@@ -429,6 +441,8 @@ export function AnsatteClient() {
         alerts={activeAlerts}
         onClose={() => setIsAlertsOpen(false)}
       />
+
+      <StatusToast toast={toast} />
     </div>
   );
 }

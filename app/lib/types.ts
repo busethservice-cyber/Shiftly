@@ -11,6 +11,7 @@ export type UnavailablePeriod = {
   startTime?: string;
   endTime?: string;
   reason: UnavailablePeriodReason;
+  note?: string;
 };
 
 export type RecurringUnavailablePeriod = {
@@ -26,6 +27,7 @@ export type RecurringUnavailablePeriod = {
   validFrom?: string;
   /** Optional inclusive ISO date (YYYY-MM-DD) */
   validTo?: string;
+  note?: string;
 };
 
 export type Employee = {

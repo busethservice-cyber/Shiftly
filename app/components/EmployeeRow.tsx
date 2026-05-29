@@ -48,13 +48,14 @@ function unavailableBadgeCopy(u: EmployeeDayUnavailableDisplay): { primary: stri
   const reasonStr = reasons.size > 0 ? [...reasons].join(" · ") : null;
 
   if (u.blocksWholeDay) {
-    return { primary: "Hele dagen", secondary: reasonStr };
+    return { primary: "Utilgjengelig hele dagen", secondary: reasonStr };
   }
   if (ranges.length > 0) {
-    return { primary: ranges.join(", "), secondary: reasonStr };
+    const timeLabel = ranges.length === 1 ? ranges[0]! : ranges.join(", ");
+    return { primary: `Utilgjengelig ${timeLabel}`, secondary: reasonStr };
   }
   if (reasonStr) {
-    return { primary: reasonStr, secondary: null };
+    return { primary: "Utilgjengelig hele dagen", secondary: reasonStr };
   }
   return { primary: "Utilgjengelig", secondary: null };
 }

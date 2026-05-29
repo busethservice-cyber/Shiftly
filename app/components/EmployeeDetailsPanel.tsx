@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Employee, RecurringUnavailablePeriod, UnavailablePeriod, UnavailablePeriodReason } from "@/app/lib/types";
 import { cn } from "@/app/lib/cn";
 import { formatHours } from "@/app/lib/hours";
@@ -15,6 +15,7 @@ import { getCurrentUser } from "@/app/lib/auth";
 import { getSupabaseClient } from "@/app/lib/supabaseClient";
 import { employeeStoreLabel } from "@/app/lib/employeeStoreLabel";
 import { TimePickerField } from "@/app/components/TimePickerField";
+import { isPartialUnavailablePeriod } from "@/app/lib/availabilityPersistence";
 
 const monthsFullNor = [
   "januar",
@@ -34,6 +35,10 @@ const monthsFullNor = [
 const weekdayPlural = ["mandager", "tirsdager", "onsdager", "torsdager", "fredager", "lørdager", "søndager"] as const;
 
 const periodReasons: UnavailablePeriodReason[] = ["Fri", "Ferie", "Syk", "Skole", "Annet"];
+const partialDayReasons: UnavailablePeriodReason[] = ["Fri", "Ferie", "Skole", "Annet"];
+const recurringReasonOptions = ["Skole", "Annet"] as const;
+
+type AbsenceMode = "whole" | "partial" | "recurring";
 
 function parseIsoDate(s: string): Date | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s.trim());
@@ -132,13 +137,35 @@ function SoftSelect(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
   );
 }
 
-function availabilityLabel(days: number[]) {
-  if (days.length === 0) return "Ingen begrensninger";
-  return days
-    .slice()
-    .sort((a, b) => a - b)
-    .map((d) => dayShort[d] ?? String(d))
-    .join(", ");
+function sanitizePeriodForSave(p: UnavailablePeriod): UnavailablePeriod {
+  if (isPartialUnavailablePeriod(p)) {
+    return { ...p, startTime: p.startTime!.trim(), endTime: p.endTime!.trim(), note: p.note?.trim() || undefined };
+  }
+  const { startTime: _s, endTime: _e, ...rest } = p;
+  return { ...rest, note: p.note?.trim() || undefined };
+}
+
+function sanitizeRecurringForSave(p: RecurringUnavailablePeriod): RecurringUnavailablePeriod {
+  const hasTimes = Boolean(p.startTime?.trim() && p.endTime?.trim());
+  return {
+    ...p,
+    startTime: hasTimes ? p.startTime!.trim() : undefined,
+    endTime: hasTimes ? p.endTime!.trim() : undefined,
+    reason: p.reason?.trim() || undefined,
+    validFrom: p.validFrom?.trim() || undefined,
+    validTo: p.validTo?.trim() || undefined,
+    note: p.note?.trim() || undefined,
+  };
+}
+function availabilitySummary(employee: Employee): string {
+  const whole = (employee.unavailablePeriods ?? []).filter((p) => !isPartialUnavailablePeriod(p)).length;
+  const partial = (employee.unavailablePeriods ?? []).filter((p) => isPartialUnavailablePeriod(p)).length;
+  const recurring = employee.recurringUnavailablePeriods?.length ?? 0;
+  const parts: string[] = [];
+  if (whole > 0) parts.push(`${whole} hele dag${whole === 1 ? "" : "er"}`);
+  if (partial > 0) parts.push(`${partial} del${partial === 1 ? "" : "er"} av dag`);
+  if (recurring > 0) parts.push(`${recurring} ukentlig`);
+  return parts.length > 0 ? parts.join(" · ") : "Ingen registrert";
 }
 
 function normalizeEmployee(
@@ -186,6 +213,8 @@ export function EmployeeDetailsPanel({
   const [linkEmail, setLinkEmail] = useState("");
   const [linkError, setLinkError] = useState<string | null>(null);
   const [linkLoading, setLinkLoading] = useState(false);
+  const [absenceMode, setAbsenceMode] = useState<AbsenceMode>("whole");
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setDeleteConfirmOpen(false);
@@ -230,6 +259,11 @@ export function EmployeeDetailsPanel({
   }, [employee, settings.autoCalculateContractHours, settings.fullTimeHours, storeById, storeOptions]);
 
   useEffect(() => {
+    if (!open) return;
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [open, employee?.id]);
+
+  useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (!open) return;
       if (e.key === "Escape") onClose();
@@ -262,16 +296,28 @@ export function EmployeeDetailsPanel({
     setDraft({ ...draft, unavailablePeriods: draft.unavailablePeriods.filter((p) => p.id !== id) });
   }
 
-  function addPeriod() {
+  function addWholeDayPeriod() {
     if (!draft) return;
     const day = todayIsoLocal();
     const next: UnavailablePeriod = {
       id: makeId(),
       startDate: day,
       endDate: day,
-      reason: "Fri",
-      startTime: "",
-      endTime: "",
+      reason: "Ferie",
+    };
+    setDraft({ ...draft, unavailablePeriods: [...draft.unavailablePeriods, next] });
+  }
+
+  function addPartialDayPeriod() {
+    if (!draft) return;
+    const day = todayIsoLocal();
+    const next: UnavailablePeriod = {
+      id: makeId(),
+      startDate: day,
+      endDate: day,
+      reason: "Ferie",
+      startTime: "08:00",
+      endTime: "16:00",
     };
     setDraft({ ...draft, unavailablePeriods: [...draft.unavailablePeriods, next] });
   }
@@ -298,9 +344,8 @@ export function EmployeeDetailsPanel({
       id: makeId(),
       weekday: 0,
       startTime: "08:00",
-      endTime: "15:00",
+      endTime: "13:55",
       reason: "Skole",
-      validFrom: "",
       validTo: "",
     };
     setDraft({ ...draft, recurringUnavailablePeriods: [...list, next] });
@@ -348,7 +393,7 @@ export function EmployeeDetailsPanel({
               </button>
             </div>
 
-            <div className="flex-1 space-y-4 overflow-auto px-5 pb-5">
+            <div ref={scrollRef} className="flex-1 space-y-4 overflow-auto px-5 pb-5">
               <div className="rounded-3xl bg-[#F6F8FC] p-4 shadow-[0_12px_24px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.04]">
                 <div className="grid grid-cols-2 gap-3 text-[12.5px] font-semibold text-slate-700">
                   <div>
@@ -356,8 +401,8 @@ export function EmployeeDetailsPanel({
                     <div className="mt-1">{draft ? `${formatHours(derivedContractHours)} t/uke` : "—"}</div>
                   </div>
                   <div>
-                    <div className="text-[12px] font-semibold text-slate-500">Tilgjengelighet (ukedager)</div>
-                    <div className="mt-1">{draft ? availabilityLabel(draft.unavailableDays) : "—"}</div>
+                    <div className="text-[12px] font-semibold text-slate-500">Fravær</div>
+                    <div className="mt-1">{draft ? availabilitySummary(draft) : "—"}</div>
                   </div>
                 </div>
               </div>
@@ -578,282 +623,275 @@ export function EmployeeDetailsPanel({
                   />
                 </div>
 
-                <div className="mt-4">
-                  <SectionTitle>Utilgjengelighet</SectionTitle>
-                  <div className="mt-3">
-                    <FieldLabel>Ukedager (gjentakende)</FieldLabel>
-                  <p className="mt-1 text-[12px] font-medium text-slate-500">Utilgjengelige ukedager (gjentakende)</p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {dayShort.map((label, idx) => {
-                      const selected = draft?.unavailableDays.includes(idx) ?? false;
-                      return (
-                        <button
-                          key={label}
-                          type="button"
-                          disabled={!draft}
-                          onClick={() => {
-                            if (!draft) return;
-                            const has = draft.unavailableDays.includes(idx);
-                            const nextDays = has ? draft.unavailableDays.filter((d) => d !== idx) : [...draft.unavailableDays, idx];
-                            setDraft({ ...draft, unavailableDays: nextDays });
-                          }}
-                          className={cn(
-                            "rounded-full px-3 py-1.5 text-[12px] font-semibold shadow-[0_10px_22px_rgba(15,23,42,0.05)] ring-1 ring-slate-900/[0.05]",
-                            selected ? "bg-violet-50 text-violet-700 ring-violet-100" : "bg-white/70 text-slate-600 hover:bg-white",
-                          )}
-                        >
-                          {label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  </div>
-                </div>
-
                 <div className="mt-5 border-t border-slate-900/[0.06] pt-5">
-                  <div className="flex items-center justify-between gap-3">
-                    <FieldLabel>Fast utilgjengelighet</FieldLabel>
+                  <SectionTitle>Tilgjengelighet og fravær</SectionTitle>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {(
+                      [
+                        ["whole", "Hele dager"],
+                        ["partial", "Deler av dag"],
+                        ["recurring", "Fast ukentlig"],
+                      ] as const
+                    ).map(([mode, label]) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        disabled={!draft}
+                        onClick={() => setAbsenceMode(mode)}
+                        className={cn(
+                          "rounded-full px-3 py-1.5 text-[12px] font-semibold shadow-[0_10px_22px_rgba(15,23,42,0.05)] ring-1 ring-slate-900/[0.05]",
+                          absenceMode === mode
+                            ? "bg-violet-600 text-white ring-violet-200"
+                            : "bg-white/70 text-slate-600 hover:bg-white",
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <p className="text-[12px] font-medium text-slate-500">
+                      {absenceMode === "whole"
+                        ? "Fravær for hele dager uten klokkeslett."
+                        : absenceMode === "partial"
+                          ? "Utilgjengelig deler av én dag, f.eks. ferie til kl. 16:00."
+                          : "Gjentakende ukedager med klokkeslett, f.eks. skole hver mandag."}
+                    </p>
                     <button
                       type="button"
                       disabled={!draft}
-                      onClick={addRecurring}
-                      className="rounded-full bg-white/80 px-3 py-1.5 text-[11.5px] font-semibold text-violet-700 shadow-[0_10px_22px_rgba(15,23,42,0.05)] ring-1 ring-violet-100 hover:bg-violet-50 disabled:opacity-50"
+                      onClick={() => {
+                        if (absenceMode === "whole") addWholeDayPeriod();
+                        else if (absenceMode === "partial") addPartialDayPeriod();
+                        else addRecurring();
+                      }}
+                      className="shrink-0 rounded-full bg-white/80 px-3 py-1.5 text-[11.5px] font-semibold text-violet-700 shadow-[0_10px_22px_rgba(15,23,42,0.05)] ring-1 ring-violet-100 hover:bg-violet-50 disabled:opacity-50"
                     >
-                      + Legg til fast
+                      + Legg til
                     </button>
                   </div>
-                  <p className="mt-1 text-[12px] font-medium text-slate-500">
-                    Gjentakende blokkeringer per ukedag, med valgfri tidsperiode og gyldighetsdato.
-                  </p>
 
-                  <div className="mt-3 space-y-3">
-                    {(draft?.recurringUnavailablePeriods ?? []).map((p) => {
-                      const dayLabel = dayShort[p.weekday] ?? `Dag ${p.weekday}`;
-                      const wholeDay = !(p.startTime && p.endTime);
-                      const validity =
-                        (p.validFrom ? `fra ${p.validFrom}` : "") +
-                        (p.validTo ? `${p.validFrom ? " " : ""}til ${p.validTo}` : "");
-
-                      return (
+                  {absenceMode === "recurring" ? (
+                    <div className="mt-3 space-y-3">
+                      {(draft?.recurringUnavailablePeriods ?? []).map((p) => (
                         <div
                           key={p.id}
                           className="rounded-2xl bg-[#F6F8FC] p-3.5 shadow-[0_10px_22px_rgba(15,23,42,0.05)] ring-1 ring-slate-900/[0.04]"
                         >
                           <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="rounded-full bg-white/80 px-3 py-1 text-[11.5px] font-semibold text-slate-700 ring-1 ring-slate-900/[0.05]">
-                                  {dayLabel}
-                                </span>
-                                <div className="text-[13px] font-semibold text-slate-900">
-                                  {wholeDay ? "Hele dagen" : `${p.startTime}–${p.endTime}`}
-                                  {p.reason ? ` · ${p.reason}` : ""}
-                                </div>
-                              </div>
-                              {validity.trim() ? (
-                                <div className="mt-1 text-[12px] font-medium text-slate-500">{validity.trim()}</div>
-                              ) : null}
+                            <div className="min-w-0 text-[13px] font-semibold text-slate-900">
+                              {dayShort[p.weekday]} {p.startTime}–{p.endTime}
+                              {p.reason ? ` · ${p.reason}` : ""}
                             </div>
                             <button
                               type="button"
                               onClick={() => removeRecurring(p.id)}
                               className="grid size-9 shrink-0 place-items-center rounded-xl bg-white/80 text-slate-500 shadow-[0_8px_18px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.05] hover:text-rose-600"
-                              aria-label="Fjern fast utilgjengelighet"
+                              aria-label="Fjern fast ukentlig fravær"
                             >
                               <Trash2 className="size-4" />
                             </button>
                           </div>
-
-                          <div className="mt-3 grid grid-cols-2 gap-3">
-                            <div className="col-span-2">
-                              <div className="text-[11px] font-semibold text-slate-500">Ukedag</div>
-                              <SoftSelect
-                                className="mt-1"
-                                value={String(p.weekday)}
-                                onChange={(e) => patchRecurring(p.id, { weekday: Number(e.target.value) })}
-                              >
-                                {dayShort.map((lbl, idx) => (
-                                  <option key={lbl} value={String(idx)}>
-                                    {lbl}
-                                  </option>
+                          <div className="mt-3 space-y-3">
+                            <div>
+                              <FieldLabel>Ukedag</FieldLabel>
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {dayShort.map((label, idx) => (
+                                  <button
+                                    key={label}
+                                    type="button"
+                                    onClick={() => patchRecurring(p.id, { weekday: idx })}
+                                    className={cn(
+                                      "rounded-full px-3 py-1.5 text-[12px] font-semibold ring-1 ring-slate-900/[0.05]",
+                                      p.weekday === idx
+                                        ? "bg-violet-50 text-violet-700 ring-violet-100"
+                                        : "bg-white/70 text-slate-600 hover:bg-white",
+                                    )}
+                                  >
+                                    {label}
+                                  </button>
                                 ))}
-                              </SoftSelect>
+                              </div>
                             </div>
-
-                            <div className="col-span-2 flex items-center justify-between rounded-2xl bg-white/70 px-3.5 py-2.5 ring-1 ring-slate-900/[0.05]">
-                              <div className="text-[12px] font-semibold text-slate-600">Hele dagen</div>
-                              <button
-                                type="button"
-                                disabled={!draft}
-                                onClick={() => {
-                                  const makeWholeDay = !wholeDay;
-                                  if (makeWholeDay) patchRecurring(p.id, { startTime: "", endTime: "" });
-                                  else patchRecurring(p.id, { startTime: "08:00", endTime: "15:00" });
-                                }}
-                                className={cn(
-                                  "rounded-full px-3 py-1 text-[12px] font-semibold ring-1 ring-slate-900/[0.06]",
-                                  wholeDay ? "bg-emerald-50 text-emerald-800 ring-emerald-100" : "bg-slate-100 text-slate-600",
-                                )}
-                              >
-                                {wholeDay ? "På" : "Av"}
-                              </button>
-                            </div>
-
-                            {!wholeDay ? (
-                              <>
-                                <div>
-                                  <TimePickerField
-                                    label="Start"
-                                    value={p.startTime ?? ""}
-                                    onChange={(v) => patchRecurring(p.id, { startTime: v })}
-                                    inputClassName="mt-1 px-3 py-2 text-[13px]"
-                                  />
-                                </div>
-                                <div>
-                                  <TimePickerField
-                                    label="Slutt"
-                                    value={p.endTime ?? ""}
-                                    onChange={(v) => patchRecurring(p.id, { endTime: v })}
-                                    inputClassName="mt-1 px-3 py-2 text-[13px]"
-                                  />
-                                </div>
-                              </>
-                            ) : null}
-
-                            <div className="col-span-2">
-                              <div className="text-[11px] font-semibold text-slate-500">Årsak (valgfritt)</div>
-                              <SoftInput
-                                className="mt-1"
-                                placeholder="F.eks. Skole"
-                                value={p.reason ?? ""}
-                                onChange={(e) => patchRecurring(p.id, { reason: e.target.value })}
+                            <div className="grid grid-cols-2 gap-3">
+                              <TimePickerField
+                                label="Fra klokkeslett"
+                                value={p.startTime ?? "08:00"}
+                                onChange={(v) => patchRecurring(p.id, { startTime: v })}
+                                inputClassName="mt-1 px-3 py-2 text-[13px]"
                               />
-                            </div>
-
-                            <div>
-                              <div className="text-[11px] font-semibold text-slate-500">Gyldig fra (valgfritt)</div>
-                              <SoftInput
-                                type="date"
-                                className="mt-1"
-                                value={p.validFrom ?? ""}
-                                onChange={(e) => patchRecurring(p.id, { validFrom: e.target.value })}
+                              <TimePickerField
+                                label="Til klokkeslett"
+                                value={p.endTime ?? "13:55"}
+                                onChange={(v) => patchRecurring(p.id, { endTime: v })}
+                                inputClassName="mt-1 px-3 py-2 text-[13px]"
                               />
                             </div>
                             <div>
-                              <div className="text-[11px] font-semibold text-slate-500">Gyldig til (valgfritt)</div>
+                              <FieldLabel>Gjelder til dato</FieldLabel>
                               <SoftInput
                                 type="date"
-                                className="mt-1"
                                 value={p.validTo ?? ""}
                                 onChange={(e) => patchRecurring(p.id, { validTo: e.target.value })}
                               />
                             </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="mt-5 border-t border-slate-900/[0.06] pt-5">
-                  <div className="flex items-center justify-between gap-3">
-                    <FieldLabel>Utilgjengelige perioder</FieldLabel>
-                    <button
-                      type="button"
-                      disabled={!draft}
-                      onClick={addPeriod}
-                      className="rounded-full bg-white/80 px-3 py-1.5 text-[11.5px] font-semibold text-violet-700 shadow-[0_10px_22px_rgba(15,23,42,0.05)] ring-1 ring-violet-100 hover:bg-violet-50 disabled:opacity-50"
-                    >
-                      + Legg til periode
-                    </button>
-                  </div>
-                  <p className="mt-1 text-[12px] font-medium text-slate-500">Konkrete fravær eller blokker med dato og valgfri klokkeslett.</p>
-
-                  <div className="mt-3 space-y-3">
-                    {draft?.unavailablePeriods.map((p) => {
-                      const line = formatPeriodSummary(p);
-                      return (
-                        <div
-                          key={p.id}
-                          className="rounded-2xl bg-[#F6F8FC] p-3.5 shadow-[0_10px_22px_rgba(15,23,42,0.05)] ring-1 ring-slate-900/[0.04]"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="rounded-full bg-white/80 px-3 py-1 text-[11.5px] font-semibold text-slate-700 ring-1 ring-slate-900/[0.05]">
-                                  {p.reason}
-                                </span>
-                                <div className="text-[13px] font-semibold text-slate-900">{line || "—"}</div>
-                              </div>
-                              <div className="mt-1 text-[12px] font-medium text-slate-500">
-                                {p.startTime && p.endTime ? `${p.startTime}–${p.endTime}` : "Hele dagen"}
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => removePeriod(p.id)}
-                              className="grid size-9 shrink-0 place-items-center rounded-xl bg-white/80 text-slate-500 shadow-[0_8px_18px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.05] hover:text-rose-600"
-                              aria-label="Fjern periode"
-                            >
-                              <Trash2 className="size-4" />
-                            </button>
-                          </div>
-                          <div className="mt-3 grid grid-cols-2 gap-3">
                             <div>
-                              <div className="text-[11px] font-semibold text-slate-500">Fra dato</div>
-                              <SoftInput
-                                type="date"
-                                className="mt-1"
-                                value={p.startDate}
-                                onChange={(e) => patchPeriod(p.id, { startDate: e.target.value })}
-                              />
-                            </div>
-                            <div>
-                              <div className="text-[11px] font-semibold text-slate-500">Til dato</div>
-                              <SoftInput
-                                type="date"
-                                className="mt-1"
-                                value={p.endDate}
-                                onChange={(e) => patchPeriod(p.id, { endDate: e.target.value })}
-                              />
-                            </div>
-                            <div>
-                              <TimePickerField
-                                label="Start (valgfritt)"
-                                value={p.startTime ?? ""}
-                                onChange={(v) => patchPeriod(p.id, { startTime: v })}
-                                inputClassName="mt-1 px-3 py-2 text-[13px]"
-                              />
-                            </div>
-                            <div>
-                              <TimePickerField
-                                label="Slutt (valgfritt)"
-                                value={p.endTime ?? ""}
-                                onChange={(v) => patchPeriod(p.id, { endTime: v })}
-                                inputClassName="mt-1 px-3 py-2 text-[13px]"
-                              />
-                            </div>
-                            <div className="col-span-2">
-                              <div className="text-[11px] font-semibold text-slate-500">Årsak</div>
+                              <FieldLabel>Type</FieldLabel>
                               <SoftSelect
-                                className="mt-1"
-                                value={p.reason}
-                                onChange={(e) => patchPeriod(p.id, { reason: e.target.value as UnavailablePeriodReason })}
+                                value={p.reason ?? "Skole"}
+                                onChange={(e) => patchRecurring(p.id, { reason: e.target.value })}
                               >
-                                {periodReasons.map((r) => (
+                                {recurringReasonOptions.map((r) => (
                                   <option key={r} value={r}>
                                     {r}
                                   </option>
                                 ))}
                               </SoftSelect>
                             </div>
+                            <div>
+                              <FieldLabel>Notat (valgfritt)</FieldLabel>
+                              <SoftInput
+                                placeholder="F.eks. Skoleår 2025/26"
+                                value={p.note ?? ""}
+                                onChange={(e) => patchRecurring(p.id, { note: e.target.value })}
+                              />
+                            </div>
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* "+ Legg til periode" shown in header */}
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-3 space-y-3">
+                      {(draft?.unavailablePeriods ?? [])
+                        .filter((p) =>
+                          absenceMode === "partial" ? isPartialUnavailablePeriod(p) : !isPartialUnavailablePeriod(p),
+                        )
+                        .map((p) => {
+                          const partial = isPartialUnavailablePeriod(p);
+                          const line = formatPeriodSummary(p);
+                          return (
+                            <div
+                              key={p.id}
+                              className="rounded-2xl bg-[#F6F8FC] p-3.5 shadow-[0_10px_22px_rgba(15,23,42,0.05)] ring-1 ring-slate-900/[0.04]"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="rounded-full bg-white/80 px-3 py-1 text-[11.5px] font-semibold text-slate-700 ring-1 ring-slate-900/[0.05]">
+                                      {p.reason}
+                                    </span>
+                                    <div className="text-[13px] font-semibold text-slate-900">{line || "—"}</div>
+                                  </div>
+                                  {partial ? (
+                                    <div className="mt-1 text-[12px] font-medium text-slate-500">
+                                      {p.startTime}–{p.endTime}
+                                    </div>
+                                  ) : null}
+                                  {p.note ? (
+                                    <div className="mt-1 text-[12px] font-medium text-slate-500">{p.note}</div>
+                                  ) : null}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => removePeriod(p.id)}
+                                  className="grid size-9 shrink-0 place-items-center rounded-xl bg-white/80 text-slate-500 shadow-[0_8px_18px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.05] hover:text-rose-600"
+                                  aria-label="Fjern fravær"
+                                >
+                                  <Trash2 className="size-4" />
+                                </button>
+                              </div>
+                              <div className="mt-3 grid grid-cols-2 gap-3">
+                                {partial ? (
+                                  <>
+                                    <div className="col-span-2">
+                                      <FieldLabel>Dato</FieldLabel>
+                                      <SoftInput
+                                        type="date"
+                                        value={p.startDate}
+                                        onChange={(e) =>
+                                          patchPeriod(p.id, { startDate: e.target.value, endDate: e.target.value })
+                                        }
+                                      />
+                                    </div>
+                                    <TimePickerField
+                                      label="Fra klokkeslett"
+                                      value={p.startTime ?? ""}
+                                      onChange={(v) => patchPeriod(p.id, { startTime: v })}
+                                      inputClassName="mt-1 px-3 py-2 text-[13px]"
+                                    />
+                                    <TimePickerField
+                                      label="Til klokkeslett"
+                                      value={p.endTime ?? ""}
+                                      onChange={(v) => patchPeriod(p.id, { endTime: v })}
+                                      inputClassName="mt-1 px-3 py-2 text-[13px]"
+                                    />
+                                    <div className="col-span-2">
+                                      <FieldLabel>Type</FieldLabel>
+                                      <SoftSelect
+                                        value={p.reason}
+                                        onChange={(e) =>
+                                          patchPeriod(p.id, { reason: e.target.value as UnavailablePeriodReason })
+                                        }
+                                      >
+                                        {partialDayReasons.map((r) => (
+                                          <option key={r} value={r}>
+                                            {r}
+                                          </option>
+                                        ))}
+                                      </SoftSelect>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <>
+                                    <div>
+                                      <FieldLabel>Fra dato</FieldLabel>
+                                      <SoftInput
+                                        type="date"
+                                        value={p.startDate}
+                                        onChange={(e) => patchPeriod(p.id, { startDate: e.target.value })}
+                                      />
+                                    </div>
+                                    <div>
+                                      <FieldLabel>Til dato</FieldLabel>
+                                      <SoftInput
+                                        type="date"
+                                        value={p.endDate}
+                                        onChange={(e) => patchPeriod(p.id, { endDate: e.target.value })}
+                                      />
+                                    </div>
+                                    <div className="col-span-2">
+                                      <FieldLabel>Type</FieldLabel>
+                                      <SoftSelect
+                                        value={p.reason}
+                                        onChange={(e) =>
+                                          patchPeriod(p.id, { reason: e.target.value as UnavailablePeriodReason })
+                                        }
+                                      >
+                                        {periodReasons.map((r) => (
+                                          <option key={r} value={r}>
+                                            {r}
+                                          </option>
+                                        ))}
+                                      </SoftSelect>
+                                    </div>
+                                  </>
+                                )}
+                                <div className="col-span-2">
+                                  <FieldLabel>Notat (valgfritt)</FieldLabel>
+                                  <SoftInput
+                                    placeholder="Valgfritt notat"
+                                    value={p.note ?? ""}
+                                    onChange={(e) => patchPeriod(p.id, { note: e.target.value })}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-4">
@@ -887,11 +925,22 @@ export function EmployeeDetailsPanel({
                       const primaryStore = (primaryStoreId
                         ? storeById.get(primaryStoreId)?.employeeSiteKey ?? null
                         : null) as Employee["primaryStore"];
-                      return normalizeEmployee(draft, settings.fullTimeHours, settings.autoCalculateContractHours, {
-                        primaryStoreId,
-                        storeIds,
-                        primaryStore,
-                      });
+                      return normalizeEmployee(
+                        {
+                          ...draft,
+                          unavailablePeriods: (draft.unavailablePeriods ?? []).map(sanitizePeriodForSave),
+                          recurringUnavailablePeriods: (draft.recurringUnavailablePeriods ?? []).map(
+                            sanitizeRecurringForSave,
+                          ),
+                        },
+                        settings.fullTimeHours,
+                        settings.autoCalculateContractHours,
+                        {
+                          primaryStoreId,
+                          storeIds,
+                          primaryStore,
+                        },
+                      );
                     })(),
                   )
                 }
