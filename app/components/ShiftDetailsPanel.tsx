@@ -7,7 +7,8 @@ import { cn } from "@/app/lib/cn";
 import { Trash2, X } from "lucide-react";
 import { getStatusPalette } from "@/app/lib/statusColors";
 import { TimePickerField } from "@/app/components/TimePickerField";
-import { canAssignShift, normalizeShiftStoreFields } from "@/app/lib/rules/shifts";
+import { canAssignShift, isAssignBlocked, normalizeShiftStoreFields } from "@/app/lib/rules/shifts";
+import { OverContractConfirmModal } from "@/app/components/OverContractConfirmModal";
 
 /** `<select>` value for Fri/off (not a UUID). */
 const FRI_SELECT_VALUE = "__shiftly_fri__";
@@ -80,9 +81,11 @@ export function ShiftDetailsPanel({
   const [draft, setDraft] = useState<Shift | null>(() =>
     shift ? normalizeShiftStoreFields(shift, stores, preferredStoreId ?? null) : null,
   );
+  const [overContractConfirm, setOverContractConfirm] = useState<{ message: string; shift: Shift } | null>(null);
 
   useEffect(() => {
     setDraft(shift ? normalizeShiftStoreFields(shift, stores, preferredStoreId ?? null) : null);
+    setOverContractConfirm(null);
   }, [shift, stores, preferredStoreId]);
 
   useEffect(() => {
@@ -114,6 +117,32 @@ export function ShiftDetailsPanel({
 
   const canSave = Boolean(draft);
   const statusLocked = true;
+
+  function attemptSave() {
+    if (!draft) return;
+    const normalized = normalizeShiftStoreFields(draft, stores, preferredStoreId ?? null);
+    const emp = employees.find((e) => e.id === normalized.employeeId) ?? null;
+    if (!emp) {
+      onSave(normalized);
+      return;
+    }
+    const check = canAssignShift({
+      employee: emp,
+      shift: normalized,
+      shifts: shiftsForWeekAllStores,
+      settings,
+      stores,
+    });
+    if (isAssignBlocked(check)) {
+      onValidationError?.(check.reason);
+      return;
+    }
+    if (check.status === "warning") {
+      setOverContractConfirm({ message: check.reason, shift: normalized });
+      return;
+    }
+    onSave(normalized);
+  }
 
   return (
     <div
@@ -316,25 +345,7 @@ export function ShiftDetailsPanel({
               <div className="flex items-center gap-3">
                 <button
                   type="button"
-                  onClick={() => {
-                    if (!draft) return;
-                    const normalized = normalizeShiftStoreFields(draft, stores, preferredStoreId ?? null);
-                    const emp = employees.find((e) => e.id === normalized.employeeId) ?? null;
-                    if (emp) {
-                      const check = canAssignShift({
-                        employee: emp,
-                        shift: normalized,
-                        shifts: shiftsForWeekAllStores,
-                        settings,
-                        stores,
-                      });
-                      if (!check.ok) {
-                        onValidationError?.(check.reason);
-                        return;
-                      }
-                    }
-                    onSave(normalized);
-                  }}
+                  onClick={attemptSave}
                   disabled={!canSave}
                   className={cn(
                     "flex-1 rounded-2xl bg-violet-600 px-4 py-3 text-[13.5px] font-semibold text-white shadow-[0_18px_36px_rgba(124,58,237,0.28)] hover:bg-violet-500",
@@ -369,6 +380,16 @@ export function ShiftDetailsPanel({
           </div>
         </div>
       </aside>
+
+      <OverContractConfirmModal
+        open={Boolean(overContractConfirm)}
+        message={overContractConfirm?.message ?? ""}
+        onConfirm={() => {
+          if (overContractConfirm) onSave(overContractConfirm.shift);
+          setOverContractConfirm(null);
+        }}
+        onCancel={() => setOverContractConfirm(null)}
+      />
     </div>
   );
 }

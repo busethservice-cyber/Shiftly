@@ -11,6 +11,20 @@ export function isoDateForShiftWeekDay(week: number, day: number): string {
 }
 
 export const SHIFT_UNAVAILABLE_REASON = "Ansatt er utilgjengelig i dette tidsrommet";
+export const SHIFT_OVER_CONTRACT_WARNING = "Ansatt går over kontrakt. Vil du likevel opprette vakten?";
+
+export type AssignShiftResult =
+  | { status: "allowed" }
+  | { status: "blocked"; reason: string }
+  | { status: "warning"; reason: string };
+
+export function isAssignBlocked(r: AssignShiftResult): r is { status: "blocked"; reason: string } {
+  return r.status === "blocked";
+}
+
+export function isAssignWarning(r: AssignShiftResult): r is { status: "warning"; reason: string } {
+  return r.status === "warning";
+}
 
 function periodCoversIso(p: UnavailablePeriod, iso: string): boolean {
   return p.startDate <= iso && iso <= p.endDate;
@@ -174,21 +188,21 @@ export function canAssignShift(args: {
   shifts: Shift[]; // all shifts for the week (across stores)
   settings: ShiftlySettings;
   stores: RetailStore[];
-}): { ok: true } | { ok: false; reason: string } {
+}): AssignShiftResult {
   const { employee, shift, shifts, settings, stores } = args;
 
-  if (shift.store === "Fri" || (!shift.startTime && !shift.endTime)) return { ok: true };
+  if (shift.store === "Fri" || (!shift.startTime && !shift.endTime)) return { status: "allowed" };
 
-  if (!shift.startTime || !shift.endTime) return { ok: false, reason: "Slutt må være etter start" };
+  if (!shift.startTime || !shift.endTime) return { status: "blocked", reason: "Slutt må være etter start" };
   if (parseTimeToMinutes(shift.endTime) <= parseTimeToMinutes(shift.startTime))
-    return { ok: false, reason: "Slutt må være etter start" };
+    return { status: "blocked", reason: "Slutt må være etter start" };
 
   if (employeeUnavailabilityBlocksShift(employee, shift)) {
-    return { ok: false, reason: SHIFT_UNAVAILABLE_REASON };
+    return { status: "blocked", reason: SHIFT_UNAVAILABLE_REASON };
   }
 
   if (!shift.storeId || !stores.some((st) => st.id === shift.storeId)) {
-    return { ok: false, reason: "Velg butikk" };
+    return { status: "blocked", reason: "Velg butikk" };
   }
 
   // Overlap check is ALWAYS global across stores.
@@ -203,7 +217,7 @@ export function canAssignShift(args: {
       excludeShiftId: shift.id,
     })
   ) {
-    return { ok: false, reason: "Ansatt har allerede vakt på dette tidspunktet" };
+    return { status: "blocked", reason: "Ansatt har allerede vakt på dette tidspunktet" };
   }
 
   if (!settings.allowMultiStoreWork) {
@@ -213,10 +227,10 @@ export function canAssignShift(args: {
     ]);
     if (assigned.size > 0) {
       if (!assigned.has(shift.storeId)) {
-        return { ok: false, reason: "Ansatt er ikke tilknyttet denne butikken" };
+        return { status: "blocked", reason: "Ansatt er ikke tilknyttet denne butikken" };
       }
     } else {
-      return { ok: false, reason: "Ansatt mangler butikktilknytning" };
+      return { status: "blocked", reason: "Ansatt mangler butikktilknytning" };
     }
   }
 
@@ -226,9 +240,9 @@ export function canAssignShift(args: {
   const remaining = Math.max(0, Number(employee.contractHours ?? 0) - planned);
   const durationH = (parseTimeToMinutes(shift.endTime) - parseTimeToMinutes(shift.startTime)) / 60;
   if (employee.contractHours > 0 && remaining + 1e-6 < durationH) {
-    return { ok: false, reason: "Ansatt har ikke nok timer igjen på kontrakten" };
+    return { status: "warning", reason: SHIFT_OVER_CONTRACT_WARNING };
   }
 
-  return { ok: true };
+  return { status: "allowed" };
 }
 

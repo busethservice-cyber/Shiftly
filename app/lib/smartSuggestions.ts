@@ -67,7 +67,7 @@ export function createShiftSuggestions(args: {
     };
 
     const assignCheck = canAssignShift({ employee: e, shift: probe, shifts, settings, stores });
-    if (!assignCheck.ok) continue;
+    if (assignCheck.status !== "allowed") continue;
 
     const plannedHours = getPlannedHoursForEmployee(e.id, shifts);
     const remaining = e.contractHours - plannedHours;

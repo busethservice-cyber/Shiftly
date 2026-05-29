@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { EmployeeComputed, Shift } from "@/app/lib/types";
+import type { Employee, EmployeeComputed, Shift } from "@/app/lib/types";
 import { Sidebar } from "@/app/components/Sidebar";
 import { TopBar } from "@/app/components/TopBar";
 import { ScheduleGrid } from "@/app/components/ScheduleGrid";
@@ -15,6 +15,7 @@ import { AlertsPanel } from "@/app/components/AlertsPanel";
 import { ConfirmCopyWeekModal } from "@/app/components/ConfirmCopyWeekModal";
 import { PublishWeekModal } from "@/app/components/PublishWeekModal";
 import { AutoPlanWeekModal } from "@/app/components/AutoPlanWeekModal";
+import { OverContractConfirmModal } from "@/app/components/OverContractConfirmModal";
 import { buildScheduleExportModel, downloadScheduleCsv, openSchedulePrintPreview } from "@/app/lib/exportSchedule";
 import { useWorkforce } from "@/app/components/WorkforceProvider";
 import { useStores } from "@/app/components/StoresProvider";
@@ -29,6 +30,7 @@ import { activeStores } from "@/app/lib/storeUtils";
 import {
   canAssignShift,
   employeeUnavailableWholeCalendarDay,
+  isAssignBlocked,
   normalizeShiftStoreFields,
 } from "@/app/lib/rules/shifts";
 
@@ -53,6 +55,7 @@ export function PlanleggClient() {
   const [isAlertsOpen, setIsAlertsOpen] = useState(false);
   const [alertsAnchorRect, setAlertsAnchorRect] = useState<DOMRect | null>(null);
   const [toast, setToast] = useState<PlanleggToast | null>(null);
+  const [overContractPending, setOverContractPending] = useState<{ message: string; action: () => void } | null>(null);
 
   useEffect(() => {
     if (!toast) return;
@@ -207,6 +210,19 @@ export function PlanleggClient() {
     });
   }, [activeAlerts.length, computed.weekShiftsVisible, employeesView, selectedStoreId, stores, weekLabel, weekOffset]);
 
+  function runWithAssignCheck(employee: Employee, shift: Shift, weekShifts: Shift[], onProceed: () => void) {
+    const check = canAssignShift({ employee, shift, shifts: weekShifts, settings, stores });
+    if (isAssignBlocked(check)) {
+      setToast({ message: check.reason, tone: "negative" });
+      return;
+    }
+    if (check.status === "warning") {
+      setOverContractPending({ message: check.reason, action: onProceed });
+      return;
+    }
+    onProceed();
+  }
+
   function clampShiftToOpening(args: { defaultStart: string; defaultEnd: string; openStart: string; openEnd: string }) {
     const { defaultStart, defaultEnd, openStart, openEnd } = args;
     const start = Math.max(parseTimeToMinutes(defaultStart), parseTimeToMinutes(openStart));
@@ -287,7 +303,7 @@ export function PlanleggClient() {
               publishState: "draft" as const,
             };
             const check = canAssignShift({ employee: emp, shift: candidateShift, shifts: tempWeekShifts(), settings, stores });
-            if (!check.ok) return false;
+            if (check.status !== "allowed") return false;
             return true;
           });
 
@@ -348,11 +364,10 @@ export function PlanleggClient() {
     };
     const emp = employees.find((e) => e.id === employeeId) ?? null;
     if (emp) {
-      const check = canAssignShift({ employee: emp, shift: next, shifts: computed.weekShiftsAll, settings, stores });
-      if (!check.ok) {
-        setToast({ message: check.reason, tone: "negative" });
-        return;
-      }
+      runWithAssignCheck(emp, next, computed.weekShiftsAll, () => {
+        setShifts((prev) => [...prev, next]);
+      });
+      return;
     }
     setShifts((prev) => [...prev, next]);
   }
@@ -399,15 +414,6 @@ export function PlanleggClient() {
 
   function saveShift(updated: Shift) {
     const normalized = normalizeShiftStoreFields(updated, stores, selectedStoreUuid ?? null);
-
-    const emp = employees.find((e) => e.id === normalized.employeeId) ?? null;
-    if (emp) {
-      const check = canAssignShift({ employee: emp, shift: normalized, shifts: computed.weekShiftsAll, settings, stores });
-      if (!check.ok) {
-        setToast({ message: check.reason, tone: "negative" });
-        return;
-      }
-    }
     setShifts((prev) => {
       const exists = prev.some((s) => s.id === normalized.id);
       return exists ? prev.map((s) => (s.id === normalized.id ? normalized : s)) : [...prev, normalized];
@@ -503,24 +509,22 @@ export function PlanleggClient() {
             onShiftClick={onShiftClick}
             onMoveShift={(shiftId, nextEmployeeId, nextDay) => {
               if (isUnavailable(nextEmployeeId, nextDay)) return;
-              setShifts((prev) => {
-                const current = prev.find((s) => s.id === shiftId) ?? null;
-                if (!current) return prev;
-                const nextShift = normalizeShiftStoreFields(
-                  { ...current, employeeId: nextEmployeeId, day: nextDay },
-                  stores,
-                  selectedStoreUuid ?? null,
-                );
-                const emp = employees.find((e) => e.id === nextEmployeeId) ?? null;
-                if (emp) {
-                  const check = canAssignShift({ employee: emp, shift: nextShift, shifts: prev, settings, stores });
-                  if (!check.ok) {
-                    setToast({ message: check.reason, tone: "negative" });
-                    return prev;
-                  }
-                }
-                return prev.map((s) => (s.id === shiftId ? nextShift : s));
-              });
+              const current = shifts.find((s) => s.id === shiftId) ?? null;
+              if (!current) return;
+              const nextShift = normalizeShiftStoreFields(
+                { ...current, employeeId: nextEmployeeId, day: nextDay },
+                stores,
+                selectedStoreUuid ?? null,
+              );
+              const apply = () => {
+                setShifts((prev) => prev.map((s) => (s.id === shiftId ? nextShift : s)));
+              };
+              const emp = employees.find((e) => e.id === nextEmployeeId) ?? null;
+              if (!emp) {
+                apply();
+                return;
+              }
+              runWithAssignCheck(emp, nextShift, shifts.filter((s) => s.week === weekOffset), apply);
             }}
           />
         </main>
@@ -690,6 +694,16 @@ export function PlanleggClient() {
         anchorRect={alertsAnchorRect}
         alerts={activeAlerts}
         onClose={() => setIsAlertsOpen(false)}
+      />
+
+      <OverContractConfirmModal
+        open={Boolean(overContractPending)}
+        message={overContractPending?.message ?? ""}
+        onConfirm={() => {
+          overContractPending?.action();
+          setOverContractPending(null);
+        }}
+        onCancel={() => setOverContractPending(null)}
       />
     </div>
   );
