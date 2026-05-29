@@ -1,19 +1,21 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Employee, Shift } from "@/app/lib/types";
 import { initialEmployees, initialShifts } from "@/app/lib/mockData";
 import { createEmployee, deleteEmployee, deleteShiftsById, getEmployees, getShifts, updateEmployee, upsertShifts } from "@/app/lib/api";
 import { useStores } from "@/app/components/StoresProvider";
 import { normalizeShiftStoreFields } from "@/app/lib/rules/shifts";
+import { useMockData } from "@/app/lib/runtimeConfig";
 
 type WorkforceContextValue = {
   employees: Employee[];
   employeesLoading: boolean;
-  updateEmployee: (updated: Employee) => void;
-  createEmployee: (next: Employee) => void;
-  deleteEmployee: (employeeId: string) => void;
-  // Keep setEmployees for non-critical local UI cases, but prefer mutations above.
+  employeesLoadError: string | null;
+  updateEmployee: (updated: Employee) => Promise<void>;
+  createEmployee: (next: Employee) => Promise<void>;
+  deleteEmployee: (employeeId: string) => Promise<void>;
+  reloadEmployees: () => Promise<void>;
   setEmployees: React.Dispatch<React.SetStateAction<Employee[]>>;
   shifts: Shift[];
   setShifts: React.Dispatch<React.SetStateAction<Shift[]>>;
@@ -24,34 +26,59 @@ const WorkforceContext = createContext<WorkforceContextValue | null>(null);
 
 export function WorkforceProvider({ children }: { children: ReactNode }) {
   const { stores, storesLoading } = useStores();
-  const [employees, setEmployees] = useState<Employee[]>(() => initialEmployees);
+  const [employees, setEmployees] = useState<Employee[]>(() => (useMockData ? initialEmployees : []));
   const [employeesLoading, setEmployeesLoading] = useState(false);
-  const [shifts, setShifts] = useState<Shift[]>(() => initialShifts);
+  const [employeesLoadError, setEmployeesLoadError] = useState<string | null>(null);
+  const [shifts, setShifts] = useState<Shift[]>(() => (useMockData ? initialShifts : []));
   const [shiftsLoading, setShiftsLoading] = useState(false);
 
-  // (reserved) shiftsRef if we later add debounced sync/retries
+  const reloadEmployees = useCallback(async () => {
+    setEmployeesLoading(true);
+    setEmployeesLoadError(null);
+    try {
+      const data = await getEmployees();
+      setEmployees(data);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Kunne ikke laste ansatte";
+      console.error("[Shiftly][employees] reload failed", err);
+      setEmployeesLoadError(msg);
+      if (useMockData) {
+        setEmployees(initialEmployees);
+      } else {
+        setEmployees([]);
+      }
+      throw err;
+    } finally {
+      setEmployeesLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     let alive = true;
 
     async function load() {
       setEmployeesLoading(true);
+      setEmployeesLoadError(null);
       try {
         const data = await getEmployees();
         if (!alive) return;
         setEmployees(data);
       } catch (err) {
-        // Keep app safe: fall back to mock data on any error.
-        console.error("Failed to load employees, falling back to mock data.", err);
+        const msg = err instanceof Error ? err.message : "Kunne ikke laste ansatte";
+        console.error("[Shiftly][employees] initial load failed", err);
         if (!alive) return;
-        setEmployees(initialEmployees);
+        setEmployeesLoadError(msg);
+        if (useMockData) {
+          setEmployees(initialEmployees);
+        } else {
+          setEmployees([]);
+        }
       } finally {
-        if (!alive) return;
-        setEmployeesLoading(false);
+        if (alive) setEmployeesLoading(false);
       }
     }
 
-    load();
+    void load();
     return () => {
       alive = false;
     };
@@ -69,14 +96,13 @@ export function WorkforceProvider({ children }: { children: ReactNode }) {
       } catch (err) {
         console.error("Failed to load shifts, falling back to mock data.", err);
         if (!alive) return;
-        setShifts(initialShifts);
+        setShifts(useMockData ? initialShifts : []);
       } finally {
-        if (!alive) return;
-        setShiftsLoading(false);
+        if (alive) setShiftsLoading(false);
       }
     }
 
-    load();
+    void load();
     return () => {
       alive = false;
     };
@@ -86,7 +112,6 @@ export function WorkforceProvider({ children }: { children: ReactNode }) {
     setShifts((prev) => {
       const next = typeof updater === "function" ? (updater as (p: Shift[]) => Shift[])(prev) : updater;
 
-      // Optimistic UI: state is updated immediately, persistence runs in background.
       queueMicrotask(() => {
         try {
           const prevById = new Map(prev.map((s) => [s.id, s] as const));
@@ -102,7 +127,6 @@ export function WorkforceProvider({ children }: { children: ReactNode }) {
               inserts.push(sNext);
               continue;
             }
-            // Compare persisted fields only
             const changed =
               sPrev.employeeId !== sNext.employeeId ||
               sPrev.storeId !== sNext.storeId ||
@@ -151,32 +175,40 @@ export function WorkforceProvider({ children }: { children: ReactNode }) {
     });
   }, [shiftsLoading, storesLoading, stores]);
 
-  const updateEmployeeWithSync = (updated: Employee) => {
+  const updateEmployeeWithSync = async (updated: Employee) => {
+    const prevSnapshot = employees;
     setEmployees((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
-    queueMicrotask(() => {
-      void updateEmployee(updated).catch((err) => {
-        console.error("Failed to persist employee update.", err);
-      });
-    });
+    try {
+      await updateEmployee(updated);
+      await reloadEmployees();
+    } catch (err) {
+      setEmployees(prevSnapshot);
+      throw err;
+    }
   };
 
-  const createEmployeeWithSync = (next: Employee) => {
+  const createEmployeeWithSync = async (next: Employee) => {
     setEmployees((prev) => (prev.some((e) => e.id === next.id) ? prev : [...prev, next]));
-    queueMicrotask(() => {
-      void createEmployee(next).catch((err) => {
-        console.error("Failed to persist employee create.", err);
-      });
-    });
+    try {
+      await createEmployee(next);
+      await reloadEmployees();
+    } catch (err) {
+      setEmployees((prev) => prev.filter((e) => e.id !== next.id));
+      throw err;
+    }
   };
 
-  const deleteEmployeeWithSync = (employeeId: string) => {
+  const deleteEmployeeWithSync = async (employeeId: string) => {
+    const prevEmployees = employees;
     setEmployees((prev) => prev.filter((e) => e.id !== employeeId));
     setShiftsWithSync((prev) => prev.filter((s) => s.employeeId !== employeeId));
-    queueMicrotask(() => {
-      void deleteEmployee(employeeId).catch((err) => {
-        console.error("Failed to persist employee delete.", err);
-      });
-    });
+    try {
+      await deleteEmployee(employeeId);
+      await reloadEmployees();
+    } catch (err) {
+      setEmployees(prevEmployees);
+      throw err;
+    }
   };
 
   const value = useMemo(
@@ -184,14 +216,16 @@ export function WorkforceProvider({ children }: { children: ReactNode }) {
       employees,
       setEmployees,
       employeesLoading,
+      employeesLoadError,
       updateEmployee: updateEmployeeWithSync,
       createEmployee: createEmployeeWithSync,
       deleteEmployee: deleteEmployeeWithSync,
+      reloadEmployees,
       shifts,
       setShifts: setShiftsWithSync,
       shiftsLoading,
     }),
-    [employees, employeesLoading, shifts, shiftsLoading],
+    [employees, employeesLoadError, employeesLoading, reloadEmployees, shifts, shiftsLoading],
   );
 
   return <WorkforceContext.Provider value={value}>{children}</WorkforceContext.Provider>;

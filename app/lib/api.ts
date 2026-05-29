@@ -47,6 +47,19 @@ function lsWriteJson(key: string, value: unknown) {
   }
 }
 
+function isUuid(value: string | null | undefined): boolean {
+  if (!value) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function logEmployees(phase: string, detail: Record<string, unknown>) {
+  console.info(`[Shiftly][employees] ${phase}`, detail);
+}
+
+function sanitizeStoreIdForDb(storeId: string | null | undefined): string | null {
+  return isUuid(storeId) ? storeId! : null;
+}
+
 function reasonToDb(r: UnavailablePeriodReason): DbAvailabilityPeriod["reason"] {
   if (r === "Syk") return "syk";
   if (r === "Fri") return "fri";
@@ -275,6 +288,8 @@ export async function getEmployees(): Promise<Employee[]> {
   const orgId = await getCurrentOrganizationId();
   if (!orgId) throw new Error("Not authenticated");
 
+  logEmployees("load start", { organization_id: orgId });
+
   // Needed to derive site key and to hydrate storeIds.
   const stores = await getStores();
   const storeById = new Map(stores.map((s) => [s.id, s] as const));
@@ -285,7 +300,10 @@ export async function getEmployees(): Promise<Employee[]> {
     .select("*")
     .eq("is_active", true)
     .eq("organization_id", orgId);
-  if (employeesError) throw employeesError;
+  if (employeesError) {
+    logEmployees("load error", { message: employeesError.message, code: employeesError.code });
+    throw employeesError;
+  }
 
   const dbEmployees = (employeesData ?? []) as DbEmployee[];
   const employeeIds = dbEmployees.map((e) => e.id);
@@ -348,7 +366,9 @@ export async function getEmployees(): Promise<Employee[]> {
     await persistSupabaseEmployeeStoreNormalization({ orgId, dbRows: dbEmployees, normalized });
   }
 
-  return normalized.map((r) => r.employee);
+  const result = normalized.map((r) => r.employee);
+  logEmployees("load success", { count: result.length, organization_id: orgId });
+  return result;
 }
 
 export async function getShifts(): Promise<Shift[]> {
@@ -456,6 +476,9 @@ export async function updateEmployee(updated: Employee): Promise<void> {
   if (!orgId) throw new Error("Not authenticated");
   const supabase = getSupabaseClient();
 
+  const storeId = sanitizeStoreIdForDb(updated.primaryStoreId);
+  logEmployees("update start", { id: updated.id, organization_id: orgId, store_id: storeId });
+
   const { error } = await supabase
     .from("employees")
     .update({
@@ -463,13 +486,17 @@ export async function updateEmployee(updated: Employee): Promise<void> {
       role: updated.role ?? "employee",
       position_percent: updated.contractPercent,
       contract_hours: updated.contractHours,
-      store_id: updated.primaryStoreId ?? null,
+      store_id: storeId,
       user_id: updated.userId ?? null,
       is_active: true,
     })
     .eq("id", updated.id)
     .eq("organization_id", orgId);
-  if (error) throw error;
+  if (error) {
+    logEmployees("update error", { message: error.message, code: error.code, id: updated.id });
+    throw error;
+  }
+  logEmployees("update success", { id: updated.id });
 
   // MVP fallback: store multi-store assignment locally until Supabase schema supports it.
   writeEmployeeStoresCache({
@@ -508,9 +535,9 @@ export async function createEmployee(next: Employee): Promise<void> {
   const supabase = getSupabaseClient();
 
   const row: DbEmployee = {
-    id: next.id || makeId(),
+    id: next.id && isUuid(next.id) ? next.id : makeId(),
     organization_id: orgId,
-    store_id: next.primaryStoreId ?? null,
+    store_id: sanitizeStoreIdForDb(next.primaryStoreId),
     user_id: next.userId ?? null,
     role: (next.role ?? "employee") as DbEmployee["role"],
     name: next.name,
@@ -519,8 +546,20 @@ export async function createEmployee(next: Employee): Promise<void> {
     is_active: true,
   };
 
-  const { error } = await supabase.from("employees").insert([row]);
-  if (error) throw error;
+  logEmployees("create start", {
+    id: row.id,
+    organization_id: row.organization_id,
+    store_id: row.store_id,
+    role: row.role,
+    name: row.name,
+  });
+
+  const { data: inserted, error } = await supabase.from("employees").insert([row]).select("id").single();
+  if (error) {
+    logEmployees("create error", { message: error.message, code: error.code, id: row.id });
+    throw error;
+  }
+  logEmployees("create success", { id: inserted?.id ?? row.id, organization_id: orgId });
 
   // MVP fallback: store multi-store assignment locally until Supabase schema supports it.
   writeEmployeeStoresCache({
@@ -538,7 +577,13 @@ export async function createEmployee(next: Employee): Promise<void> {
     ...(lsReadJson<Record<string, number[]>>(LS_KEYS.employeeUnavailableDays) ?? {}),
     [row.id]: next.unavailableDays ?? [],
   });
-  await upsertAvailabilityPeriods(row.id, next.unavailablePeriods ?? []);
+  try {
+    await upsertAvailabilityPeriods(row.id, next.unavailablePeriods ?? []);
+  } catch (availErr) {
+    const msg = availErr instanceof Error ? availErr.message : String(availErr);
+    logEmployees("create availability warning", { employee_id: row.id, message: msg });
+    // Employee row is already persisted; do not fail the whole create.
+  }
 }
 
 export async function deleteEmployee(employeeId: string): Promise<void> {

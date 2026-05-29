@@ -15,10 +15,7 @@ import { useStores } from "@/app/components/StoresProvider";
 import { useSettings } from "@/app/components/SettingsProvider";
 import { useAlerts } from "@/app/components/AlertsProvider";
 import { InviteEmployeeModal } from "@/app/components/InviteEmployeeModal";
-import { useMockData } from "@/app/lib/runtimeConfig";
 import { useInvites } from "@/app/components/InvitesProvider";
-import { getSupabaseClient } from "@/app/lib/supabaseClient";
-import { getCurrentOrganizationId } from "@/app/lib/auth";
 import { activeStores } from "@/app/lib/storeUtils";
 import { employeeStoreLabel } from "@/app/lib/employeeStoreLabel";
 
@@ -73,7 +70,16 @@ function hasUtilgjengelig(e: Employee) {
 }
 
 export function AnsatteClient() {
-  const { employees, updateEmployee, createEmployee, deleteEmployee: deleteEmployeePersist, shifts, setShifts, employeesLoading } = useWorkforce();
+  const {
+    employees,
+    updateEmployee,
+    createEmployee,
+    deleteEmployee: deleteEmployeePersist,
+    shifts,
+    setShifts,
+    employeesLoading,
+    employeesLoadError,
+  } = useWorkforce();
   const { stores, storesLoading } = useStores();
   const storesActive = useMemo(() => activeStores(stores), [stores]);
   const { settings } = useSettings();
@@ -125,6 +131,8 @@ export function AnsatteClient() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [persistError, setPersistError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const selectedEmployee = useMemo(
     () => (selectedEmployeeId ? employees.find((e) => e.id === selectedEmployeeId) ?? null : null),
@@ -157,12 +165,14 @@ export function AnsatteClient() {
     setPanelOpen(true);
   }
 
-  function openNewEmployee() {
+  async function openNewEmployee() {
+    setPersistError(null);
     const id = makeId();
     const pct = 20;
     const primaryStoreId = storesActive[0]?.id ?? null;
     const next: Employee = {
       id,
+      role: "employee",
       name: "Ny ansatt",
       contractPercent: pct,
       contractHours: settings.autoCalculateContractHours ? calculateContractHours(pct, settings.fullTimeHours) : 0,
@@ -175,16 +185,33 @@ export function AnsatteClient() {
       notes: "",
       avatarBg: "from-slate-200 to-slate-300",
     };
-    createEmployee(next);
-    setSelectedEmployeeId(id);
-    setPanelOpen(true);
+    setSaving(true);
+    try {
+      await createEmployee(next);
+      setSelectedEmployeeId(id);
+      setPanelOpen(true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Kunne ikke opprette ansatt i databasen";
+      setPersistError(msg);
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function deleteEmployee(employeeId: string) {
-    setShifts((prev) => prev.filter((s) => s.employeeId !== employeeId));
-    setPanelOpen(false);
-    setSelectedEmployeeId(null);
-    deleteEmployeePersist(employeeId);
+  async function deleteEmployee(employeeId: string) {
+    setPersistError(null);
+    setSaving(true);
+    try {
+      await deleteEmployeePersist(employeeId);
+      setShifts((prev) => prev.filter((s) => s.employeeId !== employeeId));
+      setPanelOpen(false);
+      setSelectedEmployeeId(null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Kunne ikke slette ansatt";
+      setPersistError(msg);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -215,6 +242,18 @@ export function AnsatteClient() {
           {employeesLoading || storesLoading ? (
             <div className="mt-4 rounded-[22px] bg-white/70 px-4 py-3 text-[13px] font-semibold text-slate-600 shadow-[0_14px_30px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.04]">
               Laster data…
+            </div>
+          ) : null}
+
+          {employeesLoadError ? (
+            <div className="mt-4 rounded-[22px] bg-amber-50 px-4 py-3 text-[13px] font-semibold text-amber-900 ring-1 ring-amber-100">
+              Kunne ikke laste ansatte fra databasen: {employeesLoadError}
+            </div>
+          ) : null}
+
+          {persistError ? (
+            <div className="mt-4 rounded-[22px] bg-rose-50 px-4 py-3 text-[13px] font-semibold text-rose-800 ring-1 ring-rose-100">
+              {persistError}
             </div>
           ) : null}
 
@@ -319,7 +358,19 @@ export function AnsatteClient() {
           setPanelOpen(false);
           setSelectedEmployeeId(null);
         }}
-        onSave={(updated) => updateEmployee(updated)}
+        onSave={async (updated) => {
+          setPersistError(null);
+          setSaving(true);
+          try {
+            await updateEmployee(updated);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : "Kunne ikke lagre ansatt";
+            setPersistError(msg);
+            throw err;
+          } finally {
+            setSaving(false);
+          }
+        }}
         onDelete={deleteEmployee}
       />
 
@@ -330,61 +381,45 @@ export function AnsatteClient() {
         onSend={async ({ email, storeId, role }) => {
           const normalizedEmail = email.trim().toLowerCase();
           addInvite({ email: normalizedEmail, status: "pending" });
+          setPersistError(null);
+          setSaving(true);
 
-          if (useMockData) {
-            const pct = 20;
-            const st = storeId ? storesActive.find((s) => s.id === storeId) : null;
-            const primaryStoreId = st?.id ?? null;
-            const next: Employee = {
-              id: makeId(),
-              name: normalizedEmail,
-              contractPercent: pct,
-              contractHours: settings.autoCalculateContractHours ? calculateContractHours(pct, settings.fullTimeHours) : 0,
-              unavailableDays: [],
-              unavailablePeriods: [],
-              primaryStoreId,
-              storeIds: primaryStoreId ? [primaryStoreId] : [],
-              primaryStore: (primaryStoreId ? st?.employeeSiteKey ?? null : null) as Employee["primaryStore"],
-              badges: ["Tilgjengelig"],
-              notes: "",
-              avatarBg: "from-slate-200 to-slate-300",
-              userId: undefined,
-              role,
-            };
-            createEmployee(next);
-            setInviteOpen(false);
+          const pct = 20;
+          const st = storeId ? storesActive.find((s) => s.id === storeId) : null;
+          const primaryStoreId = st?.id ?? null;
+          const exists = employees.some((e) => e.name.trim().toLowerCase() === normalizedEmail);
+          if (exists) {
+            setPersistError("Ansatt med denne e-posten finnes allerede.");
+            setSaving(false);
             return;
           }
 
-          const orgId = await getCurrentOrganizationId();
-          if (!orgId) throw new Error("Ikke innlogget");
+          const next: Employee = {
+            id: makeId(),
+            name: normalizedEmail,
+            contractPercent: pct,
+            contractHours: settings.autoCalculateContractHours ? calculateContractHours(pct, settings.fullTimeHours) : 7.5,
+            unavailableDays: [],
+            unavailablePeriods: [],
+            primaryStoreId,
+            storeIds: primaryStoreId ? [primaryStoreId] : [],
+            primaryStore: (primaryStoreId ? st?.employeeSiteKey ?? null : null) as Employee["primaryStore"],
+            badges: ["Tilgjengelig"],
+            notes: "",
+            avatarBg: "from-slate-200 to-slate-300",
+            role,
+          };
 
-          const supabase = getSupabaseClient();
-          const { data: existing, error: existingError } = await supabase
-            .from("employees")
-            .select("id")
-            .eq("organization_id", orgId)
-            .ilike("name", normalizedEmail)
-            .maybeSingle();
-          if (existingError) throw existingError;
-
-          if (!existing?.id) {
-            const { error: insError } = await supabase.from("employees").insert([
-              {
-                organization_id: orgId,
-                store_id: storeId,
-                user_id: null,
-                role,
-                name: normalizedEmail,
-                position_percent: 20,
-                contract_hours: 7.5,
-                is_active: true,
-              },
-            ]);
-            if (insError) throw insError;
+          try {
+            await createEmployee(next);
+            setInviteOpen(false);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : "Kunne ikke opprette invitert ansatt";
+            setPersistError(msg);
+            throw err;
+          } finally {
+            setSaving(false);
           }
-
-          setInviteOpen(false);
         }}
       />
 
