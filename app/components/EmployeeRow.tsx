@@ -105,6 +105,7 @@ export function EmployeeRow({
   onOpenEmployee,
   onOpenSuggestions,
   suggestionsEnabled = true,
+  dragEnabled = true,
   onRequireStoreSelection,
   onShiftClick,
   dayCellClassName,
@@ -118,6 +119,7 @@ export function EmployeeRow({
   onOpenEmployee?: (employeeId: string) => void;
   onOpenSuggestions: (originEmployeeId: string, day: number, anchorRect: DOMRect) => void;
   suggestionsEnabled?: boolean;
+  dragEnabled?: boolean;
   onRequireStoreSelection?: () => void;
   onShiftClick: (shift: Shift) => void;
   dayCellClassName: (day: number) => string;
@@ -202,7 +204,13 @@ export function EmployeeRow({
               {cellShifts.length > 0 ? (
                 <div className="flex shrink-0 flex-col gap-1">
                   {cellShifts.map((s) => (
-                    <DraggableShiftChip key={s.id} shift={s} onClick={onShiftClick} hasAlert={Boolean(conflictShiftIds?.has(s.id))} />
+                    <DraggableShiftChip
+                      key={s.id}
+                      shift={s}
+                      onClick={onShiftClick}
+                      hasAlert={Boolean(conflictShiftIds?.has(s.id))}
+                      dragEnabled={dragEnabled}
+                    />
                   ))}
                 </div>
               ) : null}

@@ -29,6 +29,7 @@ export function ScheduleGrid({
   onOpenEmployee,
   onOpenSuggestions,
   suggestionsEnabled = true,
+  dragEnabled = true,
   onRequireStoreSelection,
   onShiftClick,
   onMoveShift,
@@ -42,6 +43,7 @@ export function ScheduleGrid({
   onOpenEmployee?: (employeeId: string) => void;
   onOpenSuggestions: (originEmployeeId: string, day: number, anchorRect: DOMRect) => void;
   suggestionsEnabled?: boolean;
+  dragEnabled?: boolean;
   onRequireStoreSelection?: () => void;
   onShiftClick: (shift: Shift) => void;
   onMoveShift: (shiftId: string, nextEmployeeId: string, nextDay: number) => void;
@@ -66,6 +68,7 @@ export function ScheduleGrid({
   const dndContextId = useId();
 
   function onDragEnd(event: DragEndEvent) {
+    if (!dragEnabled) return;
     const overId = event.over?.id;
     if (!overId) return;
     const parsed = parseCellId(String(overId));
@@ -118,6 +121,7 @@ export function ScheduleGrid({
                   onOpenEmployee={onOpenEmployee}
                   onOpenSuggestions={onOpenSuggestions}
                   suggestionsEnabled={suggestionsEnabled}
+                  dragEnabled={dragEnabled}
                   onRequireStoreSelection={onRequireStoreSelection}
                   onShiftClick={onShiftClick}
                   conflictShiftIds={conflictShiftIds}

@@ -34,6 +34,7 @@ export function TopBar({
   onReportTabChange,
   reportTabs,
   onNewShift,
+  scheduleEditingDisabled,
 }: {
   alertsCount?: number;
   onBellClick: (anchorRect: DOMRect) => void;
@@ -62,6 +63,8 @@ export function TopBar({
   onReportTabChange?: (tab: ReportTabId) => void;
   reportTabs?: Array<{ id: ReportTabId; label: string }>;
   onNewShift?: () => void;
+  /** Disables Ny vakt and Auto-planlegg (e.g. Alle butikker read-only mode). */
+  scheduleEditingDisabled?: boolean;
 }) {
   const { alertCount, alertsHydrated } = useAlerts();
   const effectiveAlertsCount = typeof alertsCount === "number" ? alertsCount : alertCount;
@@ -86,7 +89,11 @@ export function TopBar({
               <button
                 type="button"
                 onClick={onAutoPlanWeek}
-                className="flex items-center gap-2 rounded-2xl bg-white/70 px-4 py-2.5 text-[13.5px] font-semibold text-slate-800 shadow-[0_12px_28px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.04] hover:bg-white"
+                disabled={scheduleEditingDisabled}
+                className={cn(
+                  "flex items-center gap-2 rounded-2xl bg-white/70 px-4 py-2.5 text-[13.5px] font-semibold text-slate-800 shadow-[0_12px_28px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.04] hover:bg-white",
+                  scheduleEditingDisabled && "cursor-not-allowed opacity-45 hover:bg-white/70",
+                )}
               >
                 <span>Auto-planlegg</span>
               </button>
@@ -272,7 +279,11 @@ export function TopBar({
           <button
             type="button"
             onClick={onNewShift}
-            className="flex items-center gap-2 rounded-2xl bg-violet-600 px-3.5 py-2 text-[13px] font-semibold text-white shadow-[0_18px_36px_rgba(124,58,237,0.28)] hover:bg-violet-500"
+            disabled={scheduleEditingDisabled}
+            className={cn(
+              "flex items-center gap-2 rounded-2xl bg-violet-600 px-3.5 py-2 text-[13px] font-semibold text-white shadow-[0_18px_36px_rgba(124,58,237,0.28)] hover:bg-violet-500",
+              scheduleEditingDisabled && "cursor-not-allowed opacity-45 hover:bg-violet-600",
+            )}
           >
             <Plus className="size-[18px]" />
             <span>Ny vakt</span>

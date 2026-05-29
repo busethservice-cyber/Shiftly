@@ -10,14 +10,17 @@ export function DraggableShiftChip({
   shift,
   onClick,
   hasAlert,
+  dragEnabled = true,
 }: {
   shift: Shift;
   onClick: (shift: Shift) => void;
   hasAlert?: boolean;
+  dragEnabled?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: shift.id,
     data: { type: "shift" as const, shiftId: shift.id },
+    disabled: !dragEnabled,
   });
 
   const wasDraggingRef = useRef(false);
@@ -42,8 +45,8 @@ export function DraggableShiftChip({
       )}
     >
       <div
-        {...listeners}
-        {...attributes}
+        {...(dragEnabled ? listeners : {})}
+        {...(dragEnabled ? attributes : {})}
         onClickCapture={(e) => {
           if (wasDraggingRef.current) {
             e.preventDefault();

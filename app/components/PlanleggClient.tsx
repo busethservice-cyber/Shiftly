@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Employee, EmployeeComputed, Shift } from "@/app/lib/types";
 import { Sidebar } from "@/app/components/Sidebar";
 import { TopBar } from "@/app/components/TopBar";
@@ -36,6 +36,20 @@ import {
 
 type PlanleggToast = { message: string; tone: "neutral" | "negative" };
 
+const LAST_SCHEDULE_STORE_KEY = "shiftly:lastScheduleStoreId";
+
+function resolveInitialScheduleStoreId(activeStoreIds: string[]): string {
+  if (typeof window === "undefined") return "alle";
+  try {
+    const saved = window.localStorage.getItem(LAST_SCHEDULE_STORE_KEY);
+    if (saved && saved !== "alle" && activeStoreIds.includes(saved)) return saved;
+  } catch {
+    /* ignore */
+  }
+  if (activeStoreIds.length === 1) return activeStoreIds[0]!;
+  return "alle";
+}
+
 export function PlanleggClient() {
   const { employees, updateEmployee, deleteEmployee: deleteEmployeePersist, shifts, setEmployees, setShifts, shiftsLoading, employeesLoading } = useWorkforce();
   const { stores, storesLoading } = useStores();
@@ -44,6 +58,7 @@ export function PlanleggClient() {
 
   const [weekOffset, setWeekOffset] = useState(() => currentWeekOffset());
   const [selectedStoreId, setSelectedStoreId] = useState<string>("alle");
+  const storeSelectionInitialized = useRef(false);
   const [isCopyConfirmOpen, setIsCopyConfirmOpen] = useState(false);
   const [isPublishConfirmOpen, setIsPublishConfirmOpen] = useState(false);
   const [isAutoPlanConfirmOpen, setIsAutoPlanConfirmOpen] = useState(false);
@@ -109,10 +124,43 @@ export function PlanleggClient() {
     [storesActive],
   );
 
+  const isAlleStoresMode = selectedStoreId === "alle";
+
+  useEffect(() => {
+    if (storesLoading || storeSelectionInitialized.current) return;
+    if (storesActive.length === 0) return;
+    storeSelectionInitialized.current = true;
+    setSelectedStoreId(resolveInitialScheduleStoreId(storesActive.map((s) => s.id)));
+  }, [storesLoading, storesActive]);
+
+  useEffect(() => {
+    if (selectedStoreId === "alle") return;
+    try {
+      window.localStorage.setItem(LAST_SCHEDULE_STORE_KEY, selectedStoreId);
+    } catch {
+      /* ignore */
+    }
+  }, [selectedStoreId]);
+
   useEffect(() => {
     if (selectedStoreId === "alle") return;
     if (!storesActive.some((s) => s.id === selectedStoreId)) setSelectedStoreId("alle");
   }, [storesActive, selectedStoreId]);
+
+  function selectScheduleStore(id: string) {
+    setSelectedStoreId(id);
+    if (id !== "alle") {
+      try {
+        window.localStorage.setItem(LAST_SCHEDULE_STORE_KEY, id);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  function requireStoreForEditing() {
+    setToast({ message: "Velg en butikk før du legger til vakt", tone: "neutral" });
+  }
 
   const selectedStore = useMemo(
     () => (selectedStoreId === "alle" ? null : stores.find((s) => s.id === selectedStoreId) ?? null),
@@ -233,8 +281,8 @@ export function PlanleggClient() {
   }
 
   function planAutoWeek() {
-    if (selectedStoreId === "alle") {
-      setToast({ message: "Velg en butikk før du legger til vakt", tone: "neutral" });
+    if (isAlleStoresMode) {
+      requireStoreForEditing();
       return;
     }
     const weekShiftsAll = shifts.filter((s) => s.week === weekOffset);
@@ -343,8 +391,8 @@ export function PlanleggClient() {
   }
 
   function addShift(employeeId: string, day: number) {
-    if (selectedStoreId === "alle" || !selectedStoreUuid) {
-      setToast({ message: "Velg en butikk før du legger til vakt", tone: "neutral" });
+    if (isAlleStoresMode || !selectedStoreUuid) {
+      requireStoreForEditing();
       return;
     }
     if (isUnavailable(employeeId, day)) return;
@@ -373,6 +421,10 @@ export function PlanleggClient() {
   }
 
   function onShiftClick(shift: Shift) {
+    if (isAlleStoresMode) {
+      requireStoreForEditing();
+      return;
+    }
     setSelectedShiftId(shift.id);
     setCreatingShift(null);
   }
@@ -453,10 +505,11 @@ export function PlanleggClient() {
             onExportExcel={() => downloadScheduleCsv(exportModel, "shiftly-ukeplan.csv")}
             scheduleStoreOptions={scheduleStoreOptions}
             scheduleStoreValue={selectedStoreId}
-            onScheduleStoreChange={(id) => setSelectedStoreId(id)}
+            onScheduleStoreChange={selectScheduleStore}
+            scheduleEditingDisabled={isAlleStoresMode}
             onNewShift={() => {
-              if (selectedStoreId === "alle" || !selectedStoreUuid) {
-                setToast({ message: "Velg en butikk før du legger til vakt", tone: "neutral" });
+              if (isAlleStoresMode || !selectedStoreUuid) {
+                requireStoreForEditing();
                 return;
               }
               const siteKey = selectedSiteKey ?? "";
@@ -485,29 +538,55 @@ export function PlanleggClient() {
             </div>
           ) : null}
 
+          {isAlleStoresMode && storesActive.length > 0 ? (
+            <div
+              className="mt-4 rounded-[22px] bg-violet-50/55 px-4 py-3.5 shadow-[0_14px_30px_rgba(15,23,42,0.05)] ring-1 ring-violet-100/80"
+              role="status"
+            >
+              <p className="text-[13px] font-semibold text-violet-900/90">
+                Velg en butikk for å legge til eller redigere vakter.
+              </p>
+              <div className="mt-2.5 flex flex-wrap gap-2">
+                {storesActive.map((store) => (
+                  <button
+                    key={store.id}
+                    type="button"
+                    onClick={() => selectScheduleStore(store.id)}
+                    className="rounded-full bg-white/90 px-3 py-1.5 text-[12px] font-semibold text-violet-700 shadow-[0_10px_22px_rgba(15,23,42,0.05)] ring-1 ring-violet-100 hover:bg-violet-50"
+                  >
+                    {store.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           <ScheduleGrid
             days={days}
             weekOffset={weekOffset}
             employees={employeesView}
             shifts={shiftsView}
             conflictShiftIds={conflictShiftIds}
-            suggestionsEnabled={selectedStoreId !== "alle" && Boolean(selectedStoreUuid)}
-            onRequireStoreSelection={() =>
-              setToast({ message: "Velg en butikk før du legger til vakt", tone: "neutral" })
-            }
+            suggestionsEnabled={!isAlleStoresMode && Boolean(selectedStoreUuid)}
+            dragEnabled={!isAlleStoresMode}
+            onRequireStoreSelection={requireStoreForEditing}
             onOpenEmployee={(id) => {
               setSelectedEmployeeId(id);
               setIsEmployeePanelOpen(true);
             }}
             onOpenSuggestions={(originEmployeeId, day, anchorRect) => {
-              if (selectedStoreId === "alle" || !selectedStoreUuid) {
-                setToast({ message: "Velg en butikk før du legger til vakt", tone: "neutral" });
+              if (isAlleStoresMode || !selectedStoreUuid) {
+                requireStoreForEditing();
                 return;
               }
               setSuggestions({ open: true, originEmployeeId, day, anchorRect });
             }}
             onShiftClick={onShiftClick}
             onMoveShift={(shiftId, nextEmployeeId, nextDay) => {
+              if (isAlleStoresMode) {
+                requireStoreForEditing();
+                return;
+              }
               if (isUnavailable(nextEmployeeId, nextDay)) return;
               const current = shifts.find((s) => s.id === shiftId) ?? null;
               if (!current) return;
@@ -595,8 +674,8 @@ export function PlanleggClient() {
           setSuggestions({ open: false, originEmployeeId: "", day: 0, anchorRect: null });
         }}
         onPickManual={() => {
-          if (selectedStoreId === "alle" || !selectedStoreUuid) {
-            setToast({ message: "Velg en butikk før du legger til vakt", tone: "neutral" });
+          if (isAlleStoresMode || !selectedStoreUuid) {
+            requireStoreForEditing();
             setSuggestions({ open: false, originEmployeeId: "", day: 0, anchorRect: null });
             return;
           }
@@ -619,8 +698,8 @@ export function PlanleggClient() {
           setSuggestions({ open: false, originEmployeeId: "", day: 0, anchorRect: null });
         }}
         onPickTemplate={(tpl) => {
-          if (selectedStoreId === "alle" || !selectedStoreUuid) {
-            setToast({ message: "Velg en butikk før du legger til vakt", tone: "neutral" });
+          if (isAlleStoresMode || !selectedStoreUuid) {
+            requireStoreForEditing();
             setSuggestions({ open: false, originEmployeeId: "", day: 0, anchorRect: null });
             return;
           }
