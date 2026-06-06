@@ -7,22 +7,27 @@ import { TopBar } from "@/app/components/TopBar";
 import { ScheduleGrid } from "@/app/components/ScheduleGrid";
 import { ShiftDetailsPanel } from "@/app/components/ShiftDetailsPanel";
 import { EmployeeDetailsPanel } from "@/app/components/EmployeeDetailsPanel";
-import { formatHours, isShiftOff, parseTimeToMinutes, round1, shiftDurationHours, sumEmployeeWeekHours } from "@/app/lib/hours";
+import { formatHours, isShiftOff, parseTimeToMinutes, round1, shiftDurationHours } from "@/app/lib/hours";
 import { createShiftSuggestions } from "@/app/lib/smartSuggestions";
-import { ShiftSuggestionsPopup } from "@/app/components/ShiftSuggestionsPopup";
 import { useAlerts } from "@/app/components/AlertsProvider";
 import { AlertsPanel } from "@/app/components/AlertsPanel";
 import { ConfirmCopyWeekModal } from "@/app/components/ConfirmCopyWeekModal";
 import { PublishWeekModal } from "@/app/components/PublishWeekModal";
 import { AutoPlanWeekModal } from "@/app/components/AutoPlanWeekModal";
 import { OverContractConfirmModal } from "@/app/components/OverContractConfirmModal";
+import { QuickShiftCreatePopup } from "@/app/components/QuickShiftCreatePopup";
+import { QuickShiftEditPopup } from "@/app/components/QuickShiftEditPopup";
+import { CopyShiftModal } from "@/app/components/CopyShiftModal";
+import { PlannerDayActionsModal } from "@/app/components/PlannerDayActionsModal";
+import { ShiftContextMenu } from "@/app/components/ShiftContextMenu";
+import { PlannerToolbar } from "@/app/components/PlannerToolbar";
 import { buildScheduleExportModel, downloadScheduleCsv, openSchedulePrintPreview } from "@/app/lib/exportSchedule";
 import { useWorkforce } from "@/app/components/WorkforceProvider";
 import { useStores } from "@/app/components/StoresProvider";
 import { useSettings } from "@/app/components/SettingsProvider";
 import { addDays, baseWeekStart, dayShort, formatNorDate, makeId, monthsShort } from "@/app/lib/mockData";
 import { getToday, getWeekStart, isSameDay } from "@/app/lib/dateUtils";
-import { currentWeekOffset, weekOffsetFromDate, weekStartDateFromOffset } from "@/app/lib/weekDate";
+import { currentWeekOffset, weekLabelShort, weekOffsetFromDate, weekStartDateFromOffset } from "@/app/lib/weekDate";
 import { cn } from "@/app/lib/cn";
 import { getContractStatus, getPlannedHoursForEmployee } from "@/app/lib/rules/contracts";
 import { getRequiredStaffForDay, getStaffingLevel, getStaffingStatusForDay } from "@/app/lib/rules/staffing";
@@ -71,18 +76,29 @@ export function PlanleggClient() {
   const [alertsAnchorRect, setAlertsAnchorRect] = useState<DOMRect | null>(null);
   const [toast, setToast] = useState<PlanleggToast | null>(null);
   const [overContractPending, setOverContractPending] = useState<{ message: string; action: () => void } | null>(null);
+  const [quickCreate, setQuickCreate] = useState<{
+    open: boolean;
+    employeeId: string;
+    day: number;
+    anchorRect: DOMRect | null;
+  }>({ open: false, employeeId: "", day: 0, anchorRect: null });
+  const [quickEdit, setQuickEdit] = useState<{ open: boolean; shiftId: string; anchorRect: DOMRect | null }>({
+    open: false,
+    shiftId: "",
+    anchorRect: null,
+  });
+  const [copyShiftId, setCopyShiftId] = useState<string | null>(null);
+  const [shiftContextMenu, setShiftContextMenu] = useState<{ shiftId: string; x: number; y: number } | null>(null);
+  const [dayActions, setDayActions] = useState<{ open: boolean; mode: "copy_day" | "clear_day" }>({
+    open: false,
+    mode: "copy_day",
+  });
 
   useEffect(() => {
     if (!toast) return;
     const t = window.setTimeout(() => setToast(null), 3200);
     return () => window.clearTimeout(t);
   }, [toast]);
-  const [suggestions, setSuggestions] = useState<{
-    open: boolean;
-    originEmployeeId: string;
-    day: number;
-    anchorRect: DOMRect | null;
-  }>({ open: false, originEmployeeId: "", day: 0, anchorRect: null });
 
   const days = useMemo(() => {
     const start = addDays(baseWeekStart, weekOffset * 7);
@@ -244,6 +260,31 @@ export function PlanleggClient() {
       return level;
     });
   }, [computed.weekShiftsAll, days, isAlleStoresMode, selectedStore, settings, storesActive]);
+
+  const copyWeekPreview = useMemo(() => {
+    const destStart = addDays(baseWeekStart, (weekOffset + 1) * 7);
+    return {
+      count: computed.weekShiftsVisible.length,
+      sourceLabel: weekLabelShort(weekStartDate),
+      destLabel: weekLabelShort(destStart),
+      shifts: computed.weekShiftsVisible,
+    };
+  }, [computed.weekShiftsVisible, weekOffset, weekStartDate]);
+
+  const quickEditShift = useMemo(
+    () => (quickEdit.shiftId ? shifts.find((s) => s.id === quickEdit.shiftId && s.week === weekOffset) ?? null : null),
+    [quickEdit.shiftId, shifts, weekOffset],
+  );
+
+  const copyShiftSource = useMemo(
+    () => (copyShiftId ? shifts.find((s) => s.id === copyShiftId && s.week === weekOffset) ?? null : null),
+    [copyShiftId, shifts, weekOffset],
+  );
+
+  const quickCreateEmployeeName = useMemo(
+    () => employeesView.find((e) => e.id === quickCreate.employeeId)?.name ?? "Ansatt",
+    [employeesView, quickCreate.employeeId],
+  );
 
   const selectedEmployee = useMemo(
     () => (selectedEmployeeId ? employees.find((e) => e.id === selectedEmployeeId) ?? null : null),
@@ -411,42 +452,136 @@ export function PlanleggClient() {
     return employeeUnavailableWholeCalendarDay(emp, weekOffset, day);
   }
 
-  function addShift(employeeId: string, day: number) {
+  function createShiftAt(args: { employeeId: string; day: number; startTime: string; endTime: string; onDone?: () => void }) {
     if (isAlleStoresMode || !selectedStoreUuid) {
       requireStoreForEditing();
       return;
     }
-    if (isUnavailable(employeeId, day)) return;
+    if (isUnavailable(args.employeeId, args.day)) {
+      setToast({ message: "Ansatt er utilgjengelig denne dagen", tone: "negative" });
+      return;
+    }
     const store = selectedSiteKey ?? "";
-    const { startTime: st, endTime: et } = defaultShiftSlotTimes;
     const next: Shift = {
       id: makeId(),
       week: weekOffset,
-      employeeId,
+      employeeId: args.employeeId,
       storeId: selectedStoreUuid ?? undefined,
-      day,
-      startTime: st,
-      endTime: et,
+      day: args.day,
+      startTime: args.startTime,
+      endTime: args.endTime,
       store,
       status: "normal",
       publishState: "draft" as const,
     };
-    const emp = employees.find((e) => e.id === employeeId) ?? null;
+    const emp = employees.find((e) => e.id === args.employeeId) ?? null;
+    const apply = () => {
+      setShifts((prev) => [...prev, next]);
+      args.onDone?.();
+      setToast({ message: "Vakt opprettet", tone: "neutral" });
+    };
     if (emp) {
-      runWithAssignCheck(emp, next, computed.weekShiftsAll, () => {
-        setShifts((prev) => [...prev, next]);
-      });
+      runWithAssignCheck(emp, next, computed.weekShiftsAll, apply);
       return;
     }
-    setShifts((prev) => [...prev, next]);
+    apply();
   }
 
-  function onShiftClick(shift: Shift) {
+  function closeQuickCreate() {
+    setQuickCreate({ open: false, employeeId: "", day: 0, anchorRect: null });
+  }
+
+  function duplicateShiftToDays(source: Shift, targetDays: number[]) {
+    const additions: Shift[] = [];
+    for (const day of targetDays) {
+      const next: Shift = {
+        ...source,
+        id: makeId(),
+        day,
+        publishState: "draft" as const,
+      };
+      const emp = employees.find((e) => e.id === next.employeeId);
+      if (!emp) continue;
+      const check = canAssignShift({
+        employee: emp,
+        shift: next,
+        shifts: [...computed.weekShiftsAll, ...additions],
+        settings,
+        stores,
+      });
+      if (check.status === "blocked") continue;
+      additions.push(next);
+    }
+    if (additions.length === 0) {
+      setToast({ message: "Kunne ikke kopiere vakt", tone: "negative" });
+      return;
+    }
+    setShifts((prev) => [...prev, ...additions]);
+    setToast({ message: `${additions.length} vakt${additions.length === 1 ? "" : "er"} kopiert`, tone: "neutral" });
+    setCopyShiftId(null);
+  }
+
+  function copyDayShifts(sourceDay: number, targetDays: number[]) {
+    const sourceShifts = computed.weekShiftsVisible.filter((s) => s.day === sourceDay);
+    const additions = targetDays.flatMap((targetDay) =>
+      sourceShifts.map((s) => ({
+        ...s,
+        id: makeId(),
+        day: targetDay,
+        publishState: "draft" as const,
+      })),
+    );
+    if (additions.length === 0) {
+      setToast({ message: "Ingen vakter å kopiere", tone: "neutral" });
+      return;
+    }
+    setShifts((prev) => [...prev, ...additions]);
+    setToast({ message: `${additions.length} vakter kopiert`, tone: "neutral" });
+    setDayActions({ open: false, mode: "copy_day" });
+  }
+
+  function clearDayShifts(day: number) {
+    const ids = new Set(computed.weekShiftsVisible.filter((s) => s.day === day).map((s) => s.id));
+    setShifts((prev) => prev.filter((s) => !ids.has(s.id)));
+    setToast({ message: "Vakter fjernet", tone: "neutral" });
+    setDayActions({ open: false, mode: "clear_day" });
+  }
+
+  function shiftCountForDay(day: number) {
+    return computed.weekShiftsVisible.filter((s) => s.day === day).length;
+  }
+
+  function onShiftClick(shift: Shift, anchorRect: DOMRect) {
     if (isAlleStoresMode) {
       requireStoreForEditing();
       return;
     }
-    setSelectedShiftId(shift.id);
+    setQuickEdit({ open: true, shiftId: shift.id, anchorRect });
+    setSelectedShiftId(null);
+    setCreatingShift(null);
+  }
+
+  function quickSaveShift(updated: Shift) {
+    const normalized = normalizeShiftStoreFields(updated, stores, selectedStoreUuid ?? null);
+    const emp = employees.find((e) => e.id === normalized.employeeId) ?? null;
+    const apply = () => {
+      saveShift(normalized);
+      setQuickEdit({ open: false, shiftId: "", anchorRect: null });
+      setToast({ message: "Vakt lagret", tone: "neutral" });
+    };
+    if (emp) {
+      const weekShiftsExcluding = computed.weekShiftsAll.filter((s) => s.id !== normalized.id);
+      runWithAssignCheck(emp, normalized, weekShiftsExcluding, apply);
+      return;
+    }
+    apply();
+  }
+
+  function openFullPanelFromQuick(shift: Shift) {
+    setQuickEdit({ open: false, shiftId: "", anchorRect: null });
+    const normalized = normalizeShiftStoreFields(shift, stores, selectedStoreUuid ?? null);
+    setShifts((prev) => prev.map((s) => (s.id === normalized.id ? normalized : s)));
+    setSelectedShiftId(normalized.id);
     setCreatingShift(null);
   }
 
@@ -582,6 +717,26 @@ export function PlanleggClient() {
             </div>
           ) : null}
 
+          <PlannerToolbar
+            disabled={isAlleStoresMode}
+            onCopyDay={() => {
+              if (isAlleStoresMode) {
+                requireStoreForEditing();
+                return;
+              }
+              setDayActions({ open: true, mode: "copy_day" });
+            }}
+            onCopyWeek={() => setIsCopyConfirmOpen(true)}
+            onClearDay={() => {
+              if (isAlleStoresMode) {
+                requireStoreForEditing();
+                return;
+              }
+              setDayActions({ open: true, mode: "clear_day" });
+            }}
+            onPublishWeek={() => setIsPublishConfirmOpen(true)}
+          />
+
           <ScheduleGrid
             days={days}
             weekOffset={weekOffset}
@@ -601,9 +756,14 @@ export function PlanleggClient() {
                 requireStoreForEditing();
                 return;
               }
-              setSuggestions({ open: true, originEmployeeId, day, anchorRect });
+              setQuickCreate({ open: true, employeeId: originEmployeeId, day, anchorRect });
             }}
             onShiftClick={onShiftClick}
+            onShiftContextMenu={(shift, x, y) => {
+              if (isAlleStoresMode) return;
+              setShiftContextMenu({ shiftId: shift.id, x, y });
+            }}
+            showStoreOnShifts={isAlleStoresMode}
             onMoveShift={(shiftId, nextEmployeeId, nextDay) => {
               if (isAlleStoresMode) {
                 requireStoreForEditing();
@@ -633,12 +793,13 @@ export function PlanleggClient() {
 
       <ConfirmCopyWeekModal
         open={isCopyConfirmOpen}
+        shiftCount={copyWeekPreview.count}
+        sourceWeekLabel={copyWeekPreview.sourceLabel}
+        destWeekLabel={copyWeekPreview.destLabel}
         onCancel={() => setIsCopyConfirmOpen(false)}
         onConfirm={() => {
-          const fromWeek = weekOffset;
           const toWeek = weekOffset + 1;
-          const toCopy = shifts.filter((s) => s.week === fromWeek);
-          const copied = toCopy.map((s) => ({
+          const copied = copyWeekPreview.shifts.map((s) => ({
             ...s,
             id: makeId(),
             week: toWeek,
@@ -647,6 +808,7 @@ export function PlanleggClient() {
           setShifts((prev) => [...prev, ...copied]);
           setIsCopyConfirmOpen(false);
           setWeekOffset(toWeek);
+          setToast({ message: `${copied.length} vakter kopiert`, tone: "neutral" });
         }}
       />
 
@@ -675,78 +837,81 @@ export function PlanleggClient() {
         }}
       />
 
-      <ShiftSuggestionsPopup
-        open={suggestions.open}
-        anchorRect={suggestions.anchorRect}
-        dayLabel={`${days[suggestions.day]?.short ?? ""} ${days[suggestions.day]?.date ?? ""}`.trim()}
+      <QuickShiftCreatePopup
+        open={quickCreate.open}
+        anchorRect={quickCreate.anchorRect}
+        employeeName={quickCreateEmployeeName}
+        dayLabel={`${days[quickCreate.day]?.short ?? ""} ${days[quickCreate.day]?.date ?? ""}`.trim()}
+        storeName={selectedStore?.name ?? "Butikk"}
         shiftTemplates={settings.shiftTemplates}
-        suggestions={createShiftSuggestions({
-          employees: employeesView,
-          shifts: computed.weekShiftsAll,
-          alerts: activeAlerts,
-          stores,
-          selectedStoreId,
-          settings,
-          week: weekOffset,
-          day: suggestions.day,
-          limit: 5,
-        }).candidates}
-        onPickEmployee={(employeeId) => {
-          addShift(employeeId, suggestions.day);
-          setSuggestions({ open: false, originEmployeeId: "", day: 0, anchorRect: null });
-        }}
-        onPickManual={() => {
-          if (isAlleStoresMode || !selectedStoreUuid) {
-            requireStoreForEditing();
-            setSuggestions({ open: false, originEmployeeId: "", day: 0, anchorRect: null });
-            return;
-          }
-          const siteKey = selectedSiteKey ?? "";
-          const { startTime: st, endTime: et } = defaultShiftSlotTimes;
-          const next: Shift = {
-            id: makeId(),
-            week: weekOffset,
-            employeeId: suggestions.originEmployeeId || employeesView[0]?.id || "",
-            storeId: selectedStoreUuid ?? undefined,
-            day: suggestions.day,
-            startTime: st,
-            endTime: et,
-            store: siteKey,
-            status: "normal",
-            publishState: "draft" as const,
-          };
-          setCreatingShift(next);
-          setSelectedShiftId(null);
-          setSuggestions({ open: false, originEmployeeId: "", day: 0, anchorRect: null });
-        }}
+        defaultStartTime={defaultShiftSlotTimes.startTime}
+        defaultEndTime={defaultShiftSlotTimes.endTime}
         onPickTemplate={(tpl) => {
-          if (isAlleStoresMode || !selectedStoreUuid) {
-            requireStoreForEditing();
-            setSuggestions({ open: false, originEmployeeId: "", day: 0, anchorRect: null });
-            return;
-          }
-          const siteKey = selectedSiteKey ?? "";
-          const next: Shift = {
-            id: makeId(),
-            week: weekOffset,
-            employeeId: suggestions.originEmployeeId || employeesView[0]?.id || "",
-            storeId: selectedStoreUuid ?? undefined,
-            day: suggestions.day,
+          createShiftAt({
+            employeeId: quickCreate.employeeId,
+            day: quickCreate.day,
             startTime: tpl.startTime,
             endTime: tpl.endTime,
-            store: siteKey,
-            status: "normal",
-            publishState: "draft" as const,
-          };
-          setCreatingShift(next);
-          setSelectedShiftId(null);
-          setSuggestions({ open: false, originEmployeeId: "", day: 0, anchorRect: null });
+            onDone: closeQuickCreate,
+          });
         }}
-        onClose={() => setSuggestions({ open: false, originEmployeeId: "", day: 0, anchorRect: null })}
+        onCreateCustom={(startTime, endTime) => {
+          createShiftAt({
+            employeeId: quickCreate.employeeId,
+            day: quickCreate.day,
+            startTime,
+            endTime,
+            onDone: closeQuickCreate,
+          });
+        }}
+        onClose={closeQuickCreate}
+      />
+
+      <QuickShiftEditPopup
+        open={quickEdit.open}
+        anchorRect={quickEdit.anchorRect}
+        shift={quickEditShift}
+        employees={employeesView}
+        shiftTemplates={settings.shiftTemplates}
+        onSave={quickSaveShift}
+        onMoreOptions={openFullPanelFromQuick}
+        onClose={() => setQuickEdit({ open: false, shiftId: "", anchorRect: null })}
+      />
+
+      <CopyShiftModal
+        open={Boolean(copyShiftId)}
+        shift={copyShiftSource}
+        weekDays={scheduleWeekDayOptions}
+        onConfirm={(targetDays) => {
+          if (copyShiftSource) duplicateShiftToDays(copyShiftSource, targetDays);
+        }}
+        onCancel={() => setCopyShiftId(null)}
+      />
+
+      <PlannerDayActionsModal
+        open={dayActions.open}
+        mode={dayActions.mode}
+        weekDays={scheduleWeekDayOptions}
+        shiftCount={shiftCountForDay}
+        onConfirm={(sourceDay, targetDays) => {
+          if (dayActions.mode === "copy_day") copyDayShifts(sourceDay, targetDays);
+          else clearDayShifts(sourceDay);
+        }}
+        onCancel={() => setDayActions({ open: false, mode: "copy_day" })}
+      />
+
+      <ShiftContextMenu
+        open={Boolean(shiftContextMenu)}
+        x={shiftContextMenu?.x ?? 0}
+        y={shiftContextMenu?.y ?? 0}
+        onCopy={() => {
+          if (shiftContextMenu) setCopyShiftId(shiftContextMenu.shiftId);
+        }}
+        onClose={() => setShiftContextMenu(null)}
       />
 
       <ShiftDetailsPanel
-        open={Boolean(panelShift)}
+        open={Boolean(panelShift) && !quickEdit.open}
         employees={employees}
         shift={panelShift}
         shiftsForWeekAllStores={computed.weekShiftsAll}

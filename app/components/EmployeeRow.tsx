@@ -147,6 +147,8 @@ export function EmployeeRow({
   dragEnabled = true,
   onRequireStoreSelection,
   onShiftClick,
+  onShiftContextMenu,
+  showStoreOnShifts,
   dayCellClassName,
   conflictShiftIds,
 }: {
@@ -160,7 +162,9 @@ export function EmployeeRow({
   suggestionsEnabled?: boolean;
   dragEnabled?: boolean;
   onRequireStoreSelection?: () => void;
-  onShiftClick: (shift: Shift) => void;
+  onShiftClick: (shift: Shift, anchorRect: DOMRect) => void;
+  onShiftContextMenu?: (shift: Shift, x: number, y: number) => void;
+  showStoreOnShifts?: boolean;
   dayCellClassName: (day: number) => string;
   conflictShiftIds?: Set<string>;
 }) {
@@ -220,7 +224,7 @@ export function EmployeeRow({
             id={cellId(employee.id, day)}
             disabled={dropDisabled}
             className={cn(
-              "min-h-[58px] px-2.5 py-2",
+              "min-h-[64px] px-2.5 py-2.5",
               u.blocksWholeDay && "opacity-70",
               dayCellClassName(day),
             )}
@@ -241,12 +245,15 @@ export function EmployeeRow({
               }}
             >
               {cellShifts.length > 0 ? (
-                <div className="flex shrink-0 flex-col gap-1">
+                <div className="flex shrink-0 flex-col gap-1.5">
                   {cellShifts.map((s) => (
                     <DraggableShiftChip
                       key={s.id}
                       shift={s}
+                      employeeName={employee.name}
+                      showStoreName={showStoreOnShifts}
                       onClick={onShiftClick}
+                      onContextMenu={onShiftContextMenu}
                       hasAlert={Boolean(conflictShiftIds?.has(s.id))}
                       dragEnabled={dragEnabled}
                     />

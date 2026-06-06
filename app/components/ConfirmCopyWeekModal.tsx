@@ -4,10 +4,16 @@ import { cn } from "@/app/lib/cn";
 
 export function ConfirmCopyWeekModal({
   open,
+  shiftCount,
+  sourceWeekLabel,
+  destWeekLabel,
   onConfirm,
   onCancel,
 }: {
   open: boolean;
+  shiftCount: number;
+  sourceWeekLabel: string;
+  destWeekLabel: string;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -22,11 +28,11 @@ export function ConfirmCopyWeekModal({
         aria-label="Lukk"
       />
 
-      <div className="absolute left-1/2 top-1/2 w-[360px] -translate-x-1/2 -translate-y-1/2 p-4">
+      <div className="absolute left-1/2 top-1/2 w-[min(100vw-2rem,400px)] -translate-x-1/2 -translate-y-1/2 p-4">
         <div className="rounded-[28px] bg-white/90 p-5 shadow-[0_28px_70px_rgba(15,23,42,0.18)] ring-1 ring-slate-900/[0.06] backdrop-blur">
-          <div className="text-[14px] font-semibold text-slate-900">Kopier uke</div>
-          <div className="mt-2 text-[12.5px] font-medium text-slate-600">
-            Vil du kopiere denne uken til neste uke?
+          <div className="text-[15px] font-semibold text-slate-900">Kopier uke</div>
+          <div className="mt-2 text-[13px] font-medium leading-relaxed text-slate-700">
+            Kopier {shiftCount} vakt{shiftCount === 1 ? "" : "er"} fra {sourceWeekLabel} til {destWeekLabel}?
           </div>
 
           <div className="mt-5 flex items-center gap-3">
@@ -35,7 +41,7 @@ export function ConfirmCopyWeekModal({
               onClick={onConfirm}
               className="flex-1 rounded-2xl bg-violet-600 px-4 py-2.5 text-[13.5px] font-semibold text-white shadow-[0_18px_36px_rgba(124,58,237,0.28)] hover:bg-violet-500"
             >
-              Ja
+              Kopier
             </button>
             <button
               type="button"

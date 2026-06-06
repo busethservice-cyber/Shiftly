@@ -8,12 +8,18 @@ import { cn } from "@/app/lib/cn";
 
 export function DraggableShiftChip({
   shift,
+  employeeName,
+  showStoreName,
   onClick,
+  onContextMenu,
   hasAlert,
   dragEnabled = true,
 }: {
   shift: Shift;
-  onClick: (shift: Shift) => void;
+  employeeName?: string;
+  showStoreName?: boolean;
+  onClick: (shift: Shift, anchorRect: DOMRect) => void;
+  onContextMenu?: (shift: Shift, x: number, y: number) => void;
   hasAlert?: boolean;
   dragEnabled?: boolean;
 }) {
@@ -55,9 +61,15 @@ export function DraggableShiftChip({
           }
         }}
       >
-        <ShiftChip shift={shift} onClick={onClick} hasAlert={hasAlert} />
+        <ShiftChip
+          shift={shift}
+          employeeName={employeeName}
+          showStoreName={showStoreName}
+          onClick={onClick}
+          onContextMenu={onContextMenu}
+          hasAlert={hasAlert}
+        />
       </div>
     </div>
   );
 }
-

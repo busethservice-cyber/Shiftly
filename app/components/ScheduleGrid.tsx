@@ -43,6 +43,8 @@ export function ScheduleGrid({
   dragEnabled = true,
   onRequireStoreSelection,
   onShiftClick,
+  onShiftContextMenu,
+  showStoreOnShifts,
   onMoveShift,
   staffingByDay,
 }: {
@@ -57,7 +59,9 @@ export function ScheduleGrid({
   suggestionsEnabled?: boolean;
   dragEnabled?: boolean;
   onRequireStoreSelection?: () => void;
-  onShiftClick: (shift: Shift) => void;
+  onShiftClick: (shift: Shift, anchorRect: DOMRect) => void;
+  onShiftContextMenu?: (shift: Shift, x: number, y: number) => void;
+  showStoreOnShifts?: boolean;
   onMoveShift: (shiftId: string, nextEmployeeId: string, nextDay: number) => void;
   /** Per-day staffing level for header indicators (optional). */
   staffingByDay?: Array<StaffingLevel | null>;
@@ -153,6 +157,8 @@ export function ScheduleGrid({
                   dragEnabled={dragEnabled}
                   onRequireStoreSelection={onRequireStoreSelection}
                   onShiftClick={onShiftClick}
+                  onShiftContextMenu={onShiftContextMenu}
+                  showStoreOnShifts={showStoreOnShifts}
                   conflictShiftIds={conflictShiftIds}
                 />
               </div>
