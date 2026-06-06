@@ -316,9 +316,8 @@ export function PlanleggClient() {
       weekOffset,
       employees: employeesView,
       shifts: computed.weekShiftsVisible,
-      alertsCount: activeAlerts.length,
     });
-  }, [activeAlerts.length, computed.weekShiftsVisible, employeesView, selectedStoreId, stores, weekLabel, weekOffset]);
+  }, [computed.weekShiftsVisible, employeesView, selectedStoreId, stores, weekLabel, weekOffset]);
 
   function runWithAssignCheck(employee: Employee, shift: Shift, weekShifts: Shift[], onProceed: () => void) {
     const check = canAssignShift({ employee, shift, shifts: weekShifts, settings, stores });
@@ -658,7 +657,7 @@ export function PlanleggClient() {
             onPublishWeek={() => setIsPublishConfirmOpen(true)}
             onAutoPlanWeek={planAutoWeek}
             onExportPdf={() => openSchedulePrintPreview(exportModel)}
-            onExportExcel={() => downloadScheduleCsv(exportModel, "shiftly-ukeplan.csv")}
+            onExportExcel={() => downloadScheduleCsv(exportModel, "shiftly-ukeplan.xls")}
             scheduleStoreOptions={scheduleStoreOptions}
             scheduleStoreValue={selectedStoreId}
             onScheduleStoreChange={selectScheduleStore}

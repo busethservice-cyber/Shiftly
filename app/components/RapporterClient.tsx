@@ -151,9 +151,8 @@ export function RapporterClient() {
       weekOffset,
       employees: scopedEmployees,
       shifts: scopedShifts,
-      alertsCount: alertCount,
     });
-  }, [alertCount, scopedEmployees, scopedShifts, selectedRetail, storeId, weekLabel, weekOffset]);
+  }, [scopedEmployees, scopedShifts, selectedRetail, storeId, weekLabel, weekOffset]);
 
   return (
     <div className="min-h-screen w-full">
@@ -187,7 +186,7 @@ export function RapporterClient() {
             onReportTabChange={setReportTab}
             reportTabs={reportTabs}
             onExportPdf={() => openSchedulePrintPreview(exportModel)}
-            onExportExcel={() => downloadScheduleCsv(exportModel, "shiftly-ukeplan.csv")}
+            onExportExcel={() => downloadScheduleCsv(exportModel, "shiftly-ukeplan.xls")}
           />
 
           <p className="mt-3 text-[12.5px] font-medium text-slate-500">

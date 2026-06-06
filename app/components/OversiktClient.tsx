@@ -123,9 +123,8 @@ export function OversiktClient() {
       weekOffset,
       employees: scopedEmployees,
       shifts: scopedShifts,
-      alertsCount: activeAlerts.length,
     });
-  }, [activeAlerts.length, scopedEmployees, scopedShifts, selectedRetail, storeId, weekLabel, weekOffset]);
+  }, [scopedEmployees, scopedShifts, selectedRetail, storeId, weekLabel, weekOffset]);
 
   const reportRows = useMemo(() => {
     return scopedEmployees.map((e) => {
