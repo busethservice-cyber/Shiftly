@@ -6,7 +6,6 @@ import { getEmployeeDayUnavailableDisplay, type EmployeeDayUnavailableDisplay } 
 import {
   getUnavailabilityChipStyle,
   unavailabilityPrimaryTextClass,
-  unavailabilitySecondaryTextClass,
 } from "@/app/lib/unavailabilityColors";
 import { cn } from "@/app/lib/cn";
 import { DraggableShiftChip } from "@/app/components/DraggableShiftChip";
@@ -44,14 +43,14 @@ function parseUnavailableDetailLine(line: string): { range: string | null; reaso
 }
 
 function unavailableBadgeCopy(u: EmployeeDayUnavailableDisplay): {
-  primary: string;
-  secondary: string | null;
+  label: string;
   tooltip: string;
   style: ReturnType<typeof getUnavailabilityChipStyle>;
 } {
   const primaryEntry = u.entries[0];
+  const reason = (u.primaryReason || primaryEntry?.reason || "Utilgjengelig").trim();
   const style = getUnavailabilityChipStyle({
-    reason: u.primaryReason || primaryEntry?.reason,
+    reason,
     wholeDay: u.blocksWholeDay || Boolean(primaryEntry?.wholeDay),
     isRecurring: primaryEntry?.isRecurring,
   });
@@ -69,36 +68,31 @@ function unavailableBadgeCopy(u: EmployeeDayUnavailableDisplay): {
   }
   const reasonStr = reasons.size > 0 ? [...reasons].join(" · ") : null;
   const noteStr = notes.size > 0 ? [...notes].join(" · ") : null;
+  const wholeDay = u.blocksWholeDay || Boolean(primaryEntry?.wholeDay);
+  const timeRange = ranges.length === 1 ? ranges[0]! : ranges.length > 1 ? ranges.join(", ") : null;
 
-  let primary = "Utilgjengelig";
-  let secondary: string | null = null;
-
-  if (u.blocksWholeDay || (primaryEntry?.wholeDay ?? false)) {
-    secondary = u.primaryReason === "Ferie" || u.primaryReason === "Syk" || u.primaryReason === "Skole"
-      ? u.primaryReason
-      : "Hele dagen";
-  } else if (ranges.length > 0) {
-    secondary = ranges.length === 1 ? ranges[0]! : ranges.join(", ");
-  } else if (reasonStr) {
-    secondary = reasonStr;
-  }
-
-  if (noteStr && secondary && !secondary.includes(noteStr)) {
-    secondary = `${secondary} · ${noteStr}`;
-  } else if (noteStr && !secondary) {
-    secondary = noteStr;
+  let label: string;
+  if (reason === "Fri" && wholeDay) {
+    label = "Fri hele dagen";
+  } else if (wholeDay) {
+    label = reason === "Annet" ? "Utilgjengelig" : reason;
+  } else if (timeRange) {
+    label = `${reason} ${timeRange}`;
+  } else {
+    label = reason;
   }
 
   const tooltipParts: string[] = [];
   if (reasonStr) tooltipParts.push(reasonStr);
-  if (ranges.length > 0) tooltipParts.push(ranges.join(", "));
+  if (timeRange) tooltipParts.push(timeRange);
   else if (primaryEntry?.startTime && primaryEntry?.endTime) {
     tooltipParts.push(`${primaryEntry.startTime}–${primaryEntry.endTime}`);
   }
+  if (wholeDay) tooltipParts.push("Hele dagen");
   if (noteStr) tooltipParts.push(noteStr);
-  const tooltip = tooltipParts.filter(Boolean).join(" · ") || primary;
+  const tooltip = tooltipParts.filter(Boolean).join(" · ") || label;
 
-  return { primary, secondary, tooltip, style };
+  return { label, tooltip, style };
 }
 
 function Avatar({ name, gradient }: { name: string; gradient: string }) {
@@ -173,7 +167,7 @@ export function EmployeeRow({
   return (
     <>
       {/* Employee cell (compact) */}
-      <div className="px-3 py-2.5">
+      <div className="px-2 py-2">
         <div
           role={onOpenEmployee ? "button" : undefined}
           tabIndex={onOpenEmployee ? 0 : undefined}
@@ -226,15 +220,15 @@ export function EmployeeRow({
             id={cellId(employee.id, day)}
             disabled={dropDisabled}
             className={cn(
-              "min-h-[56px] px-1.5 py-1.5",
-              u.blocksWholeDay && "opacity-70",
+              "min-h-[52px] px-1 py-1",
+              u.blocksWholeDay && "opacity-75",
               dayCellClassName(day),
             )}
           >
             <div
               className={cn(
-                "group relative flex h-full min-h-0 w-full flex-col",
-                !dropDisabled && isEmpty && suggestionsEnabled && "cursor-pointer",
+                "group/cell relative flex h-full min-h-0 w-full flex-col rounded-md transition-colors",
+                !dropDisabled && isEmpty && suggestionsEnabled && "cursor-pointer hover:bg-slate-50/80",
               )}
               onClick={(e) => {
                 if (dropDisabled) return;
@@ -267,44 +261,33 @@ export function EmployeeRow({
                 <div
                   className={cn(
                     "w-full min-w-0",
-                    cellShifts.length > 0 ? "mt-1 shrink-0" : "flex min-h-[1.75rem] flex-1 flex-col justify-center",
+                    cellShifts.length > 0 ? "mt-0.5 shrink-0" : "flex flex-1 items-center justify-center",
                   )}
                 >
                   <div
                     title={unavailableBadge.tooltip}
                     className={cn(
-                      "w-full max-w-full rounded-md px-1 py-0.5 text-center shadow-none",
+                      "w-full max-w-full truncate rounded-md px-1 py-0.5 text-center ring-1 ring-inset",
                       unavailableBadge.style.container,
-                      cellShifts.length === 0 && "self-center",
                     )}
                   >
                     <div
                       className={cn(
-                        "truncate text-[9px] font-semibold leading-tight tracking-tight",
+                        "truncate text-[8.5px] font-semibold leading-tight",
                         unavailabilityPrimaryTextClass(unavailableBadge.style),
                       )}
                     >
-                      {unavailableBadge.primary}
+                      {unavailableBadge.label}
                     </div>
-                    {unavailableBadge.secondary ? (
-                      <div
-                        className={cn(
-                          "truncate text-[8.5px] font-medium leading-tight",
-                          unavailabilitySecondaryTextClass(unavailableBadge.style),
-                        )}
-                      >
-                        {unavailableBadge.secondary}
-                      </div>
-                    ) : null}
                   </div>
                 </div>
               ) : null}
 
               {!dropDisabled && isEmpty && suggestionsEnabled ? (
-                <div className="pointer-events-none absolute inset-0 grid place-items-center opacity-0 transition-opacity group-hover:opacity-100">
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-white/60 px-3 py-2 text-[12px] font-semibold text-slate-500 shadow-[0_10px_22px_rgba(15,23,42,0.05)]">
-                    Foreslå
-                  </div>
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover/cell:opacity-100">
+                  <span className="rounded-md bg-white/90 px-1.5 py-0.5 text-[9px] font-medium text-slate-400 ring-1 ring-slate-200/80">
+                    +
+                  </span>
                 </div>
               ) : null}
             </div>

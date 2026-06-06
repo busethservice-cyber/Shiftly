@@ -734,7 +734,6 @@ export function PlanleggClient() {
               }
               setDayActions({ open: true, mode: "clear_day" });
             }}
-            onPublishWeek={() => setIsPublishConfirmOpen(true)}
           />
 
           <ScheduleGrid

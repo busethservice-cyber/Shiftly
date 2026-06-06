@@ -1,20 +1,18 @@
 "use client";
 
 import { cn } from "@/app/lib/cn";
-import { CalendarDays, CalendarX, Copy, Send } from "lucide-react";
+import { CalendarDays, CalendarX, Copy } from "lucide-react";
 
 export function PlannerToolbar({
   disabled,
   onCopyDay,
   onCopyWeek,
   onClearDay,
-  onPublishWeek,
 }: {
   disabled?: boolean;
   onCopyDay: () => void;
   onCopyWeek: () => void;
   onClearDay: () => void;
-  onPublishWeek: () => void;
 }) {
   const btn =
     "inline-flex items-center gap-1.5 rounded-xl bg-white/75 px-3 py-1.5 text-[12px] font-semibold text-slate-700 shadow-[0_8px_18px_rgba(15,23,42,0.05)] ring-1 ring-slate-900/[0.05] hover:bg-white disabled:cursor-not-allowed disabled:opacity-45";
@@ -33,15 +31,6 @@ export function PlannerToolbar({
       <button type="button" disabled={disabled} onClick={onClearDay} className={cn(btn, "hover:text-rose-700 hover:ring-rose-100")}>
         <CalendarX className="size-3.5 text-slate-500" />
         Fjern dag
-      </button>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={onPublishWeek}
-        className={cn(btn, "bg-violet-600 text-white ring-violet-500/20 hover:bg-violet-500 disabled:hover:bg-violet-600")}
-      >
-        <Send className="size-3.5" />
-        Publiser uke
       </button>
     </div>
   );

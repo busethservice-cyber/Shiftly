@@ -17,18 +17,44 @@ import { parseCellId } from "@/app/components/DroppableDayCell";
 import { getStatusPalette } from "@/app/lib/statusColors";
 import type { StaffingLevel } from "@/app/lib/rules/staffing";
 
+const GRID_COLS = "220px repeat(7, minmax(0, 1fr))";
+
 function LegendDot({ color }: { color: string }) {
-  return <span className={cn("inline-block size-2.5 rounded-full", color)} />;
+  return <span className={cn("inline-block size-2 rounded-full", color)} />;
 }
 
-function staffingIndicator(level: StaffingLevel | null | undefined) {
-  if (!level || level === "ok") {
-    return { dot: "bg-emerald-400", label: "Fullt bemannet", title: "Fullt bemannet" };
-  }
+function StaffingBadge({ level }: { level: StaffingLevel }) {
   if (level === "understaffed") {
-    return { dot: "bg-rose-500", label: "Underbemannet", title: "Underbemannet denne dagen" };
+    return (
+      <span
+        className="inline-flex max-w-full items-center gap-0.5 truncate rounded-full bg-rose-50 px-1.5 py-0.5 text-[8.5px] font-semibold leading-none text-rose-800 ring-1 ring-rose-100"
+        title="Underbemannet"
+      >
+        <span className="size-1 shrink-0 rounded-full bg-rose-500" aria-hidden="true" />
+        Under
+      </span>
+    );
   }
-  return { dot: "bg-sky-500", label: "Overbemannet", title: "Overbemannet denne dagen" };
+  if (level === "overstaffed") {
+    return (
+      <span
+        className="inline-flex max-w-full items-center gap-0.5 truncate rounded-full bg-sky-50 px-1.5 py-0.5 text-[8.5px] font-semibold leading-none text-sky-900 ring-1 ring-sky-100"
+        title="Overbemannet"
+      >
+        <span className="size-1 shrink-0 rounded-full bg-sky-500" aria-hidden="true" />
+        Over
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex max-w-full items-center gap-0.5 truncate rounded-full bg-emerald-50 px-1.5 py-0.5 text-[8.5px] font-semibold leading-none text-emerald-800 ring-1 ring-emerald-100"
+      title="Fullt bemannet"
+    >
+      <span className="size-1 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
+      Fullt
+    </span>
+  );
 }
 
 export function ScheduleGrid({
@@ -49,7 +75,6 @@ export function ScheduleGrid({
   staffingByDay,
 }: {
   days: Array<{ short: string; date: string; dateObj: Date }>;
-  /** Week index aligned with `shift.week` (Planlegg). */
   weekOffset: number;
   employees: EmployeeComputed[];
   shifts: Shift[];
@@ -63,7 +88,6 @@ export function ScheduleGrid({
   onShiftContextMenu?: (shift: Shift, x: number, y: number) => void;
   showStoreOnShifts?: boolean;
   onMoveShift: (shiftId: string, nextEmployeeId: string, nextDay: number) => void;
-  /** Per-day staffing level for header indicators (optional). */
   staffingByDay?: Array<StaffingLevel | null>;
 }) {
   const today = getToday();
@@ -75,7 +99,8 @@ export function ScheduleGrid({
     shiftsByEmployeeDay.set(key, list);
   }
 
-  const dayCellClassName = (day: number) => (day !== days.length - 1 ? "border-r border-slate-900/[0.04]" : "");
+  const dayCellClassName = (day: number) =>
+    day !== days.length - 1 ? "border-r border-slate-200/70" : "";
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -95,56 +120,50 @@ export function ScheduleGrid({
   }
 
   return (
-    <section className="mt-6 rounded-[34px] bg-white/80 p-5 shadow-[0_20px_44px_rgba(15,23,42,0.08)] ring-1 ring-slate-900/[0.04] backdrop-blur">
+    <section className="mt-5 overflow-hidden rounded-2xl bg-white/90 shadow-[0_16px_40px_rgba(15,23,42,0.07)] ring-1 ring-slate-200/80">
       <DndContext id={dndContextId} sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-        {/* Grid header */}
-        <div className="grid items-end gap-0" style={{ gridTemplateColumns: "248px repeat(7, minmax(0, 1fr))" }}>
-          <div className="px-4 pb-3 text-[12px] font-semibold text-slate-500">Navn</div>
+        {/* Header row */}
+        <div
+          className="grid border-b border-slate-200/80 bg-slate-50/50"
+          style={{ gridTemplateColumns: GRID_COLS }}
+        >
+          <div className="flex items-end px-3 pb-2.5 pt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Navn
+          </div>
           {days.map((d, idx) => {
             const staff = staffingByDay?.[idx] ?? null;
-            const staffUi = staffingIndicator(staff);
+            const isToday = isSameDay(d.dateObj, today);
             return (
-            <div key={d.short} className={cn("px-3 pb-3 text-center", dayCellClassName(idx))}>
               <div
-                className={cn(
-                  "mx-auto inline-flex flex-col items-center justify-center rounded-full px-3 py-1.5 text-[12px] font-semibold text-slate-600",
-                  isSameDay(d.dateObj, today) && "bg-violet-50 text-violet-700 ring-1 ring-violet-100",
-                )}
+                key={d.short}
+                className={cn("flex min-w-0 flex-col items-center gap-0.5 px-1 pb-2.5 pt-2.5", dayCellClassName(idx))}
               >
-                <span>
-                  {d.short} <span className="ml-1 font-semibold text-slate-400">{d.date}</span>
-                </span>
-                {staffingByDay ? (
-                  <span
-                    className="mt-1 inline-flex items-center gap-1 text-[10px] font-semibold text-slate-500"
-                    title={staffUi.title}
-                  >
-                    <span className={cn("inline-block size-1.5 rounded-full", staffUi.dot)} aria-hidden="true" />
-                    {staffUi.label}
-                  </span>
-                ) : null}
+                <div
+                  className={cn(
+                    "flex w-full min-w-0 max-w-full flex-col items-center gap-0.5 rounded-lg px-1 py-1",
+                    isToday && "bg-violet-50 ring-1 ring-violet-100",
+                  )}
+                >
+                  <span className="text-[11px] font-semibold leading-none text-slate-800">{d.short}</span>
+                  <span className="truncate text-[10px] font-medium leading-none text-slate-500">{d.date}</span>
+                  {staff ? <StaffingBadge level={staff} /> : null}
+                </div>
               </div>
-            </div>
             );
           })}
         </div>
 
-        {/* Rows */}
-        <div className="mt-2 overflow-hidden rounded-[28px] bg-white ring-1 ring-slate-900/[0.04]">
+        {/* Body rows */}
+        <div>
           {employees.map((emp, rowIdx) => {
-            const rowBorder = rowIdx !== employees.length - 1 ? "border-b border-slate-900/[0.04]" : "";
-
+            const rowBorder = rowIdx !== employees.length - 1 ? "border-b border-slate-200/60" : "";
             const shiftsByDay: Shift[][] = Array.from({ length: days.length }, (_, day) => {
               const key = `${emp.id}:${day}`;
               return shiftsByEmployeeDay.get(key) ?? [];
             });
 
             return (
-              <div
-                key={emp.id}
-                className={cn("grid", rowBorder)}
-                style={{ gridTemplateColumns: "248px repeat(7, minmax(0, 1fr))" }}
-              >
+              <div key={emp.id} className={cn("grid hover:bg-slate-50/20", rowBorder)} style={{ gridTemplateColumns: GRID_COLS }}>
                 <EmployeeRow
                   employee={emp}
                   weekOffset={weekOffset}
@@ -168,60 +187,41 @@ export function ScheduleGrid({
       </DndContext>
 
       {/* Legend */}
-      <div className="mt-5 rounded-3xl bg-[#F6F8FC] px-5 py-3 shadow-[0_12px_24px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.04]">
-        <div className="flex flex-wrap items-center justify-between gap-3 text-[12.5px] text-slate-600">
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-            <div className="flex items-center gap-2">
+      <div className="border-t border-slate-200/70 bg-[#F8FAFC]/80 px-4 py-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 text-[11px] text-slate-600">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span className="inline-flex items-center gap-1.5">
               <LegendDot color={getStatusPalette("normal").dotClass} />
-              <span>Innenfor kontrakt</span>
-            </div>
-            <div className="flex items-center gap-2">
+              Innenfor
+            </span>
+            <span className="inline-flex items-center gap-1.5">
               <LegendDot color={getStatusPalette("near_limit").dotClass} />
-              <span>Nær grense</span>
-            </div>
-            <div className="flex items-center gap-2">
+              Nær grense
+            </span>
+            <span className="inline-flex items-center gap-1.5">
               <LegendDot color={getStatusPalette("over_limit").dotClass} />
-              <span>Over kontrakt</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <LegendDot color="bg-violet-500" />
-              <span>Ferie</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <LegendDot color="bg-slate-700" />
-              <span>Sykmeldt</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <LegendDot color="bg-sky-500" />
-              <span>Skole / fast</span>
-            </div>
+              Over
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <LegendDot color="bg-violet-400" />
+              Ferie
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <LegendDot color="bg-slate-600" />
+              Syk
+            </span>
           </div>
-
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-slate-500">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-500">
             {staffingByDay ? (
               <>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="inline-block size-2 rounded-full bg-rose-500" />
-                  Underbemannet
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="inline-block size-2 rounded-full bg-emerald-400" />
-                  Fullt
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="inline-block size-2 rounded-full bg-sky-500" />
-                  Overbemannet
-                </span>
+                <StaffingBadge level="understaffed" />
+                <StaffingBadge level="ok" />
+                <StaffingBadge level="overstaffed" />
               </>
             ) : null}
-            <span className="inline-flex items-center gap-2">
-              <span className="inline-block size-2.5 rounded-full border border-dashed border-slate-300" />
-              Dra og slipp for å flytte vakter
-            </span>
           </div>
         </div>
       </div>
     </section>
   );
 }
-

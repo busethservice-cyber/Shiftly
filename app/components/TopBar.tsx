@@ -252,14 +252,6 @@ export function TopBar({
       <div className="flex items-center gap-3 pt-1">
         <button
           type="button"
-          className="grid size-11 place-items-center rounded-2xl bg-white/70 text-slate-500 shadow-[0_14px_30px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.04] hover:bg-white"
-          aria-label="Søk"
-        >
-          <Search className="size-[18px]" />
-        </button>
-
-        <button
-          type="button"
           className="relative grid size-11 place-items-center rounded-2xl bg-white/70 text-slate-500 shadow-[0_14px_30px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.04] hover:bg-white"
           aria-label="Varsler"
           onClick={(e) => onBellClick(e.currentTarget.getBoundingClientRect())}

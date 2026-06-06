@@ -31,18 +31,11 @@ export function DroppableDayCell({
   const { isOver, setNodeRef } = useDroppable({ id, disabled: Boolean(disabled) });
 
   return (
-    <div
-      ref={setNodeRef}
-      className={cn(
-        className,
-        // Subtle hover highlight for valid drop zones
-        isOver && !disabled && "relative",
-      )}
-    >
+    <div ref={setNodeRef} className={cn("h-full min-w-0", className, isOver && !disabled && "relative z-[1]")}>
       <div
         className={cn(
-          "h-full w-full rounded-[22px] transition-colors",
-          isOver && !disabled && "ring-2 ring-violet-200/80 bg-violet-50/30",
+          "h-full w-full min-w-0 transition-colors",
+          isOver && !disabled && "rounded-md bg-violet-50/40 ring-1 ring-violet-200/70",
         )}
       >
         {children}
@@ -50,4 +43,3 @@ export function DroppableDayCell({
     </div>
   );
 }
-

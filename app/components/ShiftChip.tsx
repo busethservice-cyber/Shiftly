@@ -62,8 +62,8 @@ export function ShiftChip({
         onContextMenu(shift, e.clientX, e.clientY);
       }}
       className={cn(
-        "group relative block w-full max-w-full min-w-0 rounded-xl px-1.5 pb-1 pt-3.5 text-center shadow-[0_6px_14px_rgba(15,23,42,0.05)] ring-1 ring-black/[0.04]",
-        "overflow-hidden",
+        "group relative block w-full max-w-full min-w-0 min-h-[38px] rounded-lg px-1.5 py-1 text-left ring-1 ring-inset ring-black/[0.05]",
+        "overflow-hidden transition-shadow hover:shadow-[0_4px_10px_rgba(15,23,42,0.06)]",
         palette.pillBg,
         "focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-200",
       )}
@@ -71,8 +71,8 @@ export function ShiftChip({
     >
       <span
         className={cn(
-          "absolute left-1 top-0.5 max-w-[calc(100%-1.25rem)] truncate rounded px-1 py-px text-[7.5px] font-semibold leading-none ring-1 ring-black/[0.03]",
-          isPublished ? "bg-emerald-50/90 text-emerald-800 ring-emerald-100" : "bg-white/70 text-slate-500 ring-slate-900/[0.05]",
+          "absolute right-1 top-0.5 rounded px-1 py-px text-[7px] font-semibold uppercase leading-none tracking-wide",
+          isPublished ? "bg-white/80 text-emerald-700" : "bg-white/70 text-slate-500",
         )}
         title={isPublished ? "Publisert" : "Utkast"}
       >
@@ -80,14 +80,14 @@ export function ShiftChip({
       </span>
       {hasAlert ? (
         <span
-          className="absolute right-1 top-1 inline-block size-1.5 rounded-full bg-rose-500 ring-1 ring-white/80"
+          className="absolute left-1 top-1 inline-block size-1.5 rounded-full bg-rose-500 ring-1 ring-white/90"
           aria-hidden="true"
         />
       ) : null}
-      <span className="flex w-full min-w-0 flex-col items-stretch gap-px">
+      <span className="flex w-full min-w-0 flex-col gap-0.5 pr-6 pt-0.5">
         <span
           className={cn(
-            "w-full min-w-0 truncate whitespace-nowrap text-[10.5px] font-semibold leading-[1.15] tabular-nums tracking-tight",
+            "w-full min-w-0 truncate whitespace-nowrap text-[10px] font-semibold leading-none tabular-nums",
             palette.pillText,
           )}
         >
@@ -95,14 +95,14 @@ export function ShiftChip({
         </span>
         <span
           className={cn(
-            "w-full min-w-0 truncate whitespace-nowrap text-[9px] font-medium leading-[1.15]",
+            "w-full min-w-0 truncate whitespace-nowrap text-[8.5px] font-medium leading-none opacity-90",
             palette.pillSubtext,
           )}
         >
           {nameLabel}
         </span>
         {!isOff && showStoreName && storeName ? (
-          <span className="w-full min-w-0 truncate whitespace-nowrap text-[8.5px] font-medium leading-[1.15] text-slate-500/90">
+          <span className="w-full min-w-0 truncate whitespace-nowrap text-[8px] font-medium leading-none text-slate-500/80">
             {storeName}
           </span>
         ) : null}
