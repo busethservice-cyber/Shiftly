@@ -46,7 +46,7 @@ export function DraggableShiftChip({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "transition-transform duration-150 ease-out",
+        "w-full min-w-0 transition-transform duration-150 ease-out",
         isDragging && "drop-shadow-[0_18px_38px_rgba(15,23,42,0.18)]",
       )}
     >

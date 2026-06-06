@@ -70,22 +70,24 @@ function unavailableBadgeCopy(u: EmployeeDayUnavailableDisplay): {
   const reasonStr = reasons.size > 0 ? [...reasons].join(" · ") : null;
   const noteStr = notes.size > 0 ? [...notes].join(" · ") : null;
 
-  let primary: string;
+  let primary = "Utilgjengelig";
+  let secondary: string | null = null;
+
   if (u.blocksWholeDay || (primaryEntry?.wholeDay ?? false)) {
-    if (u.primaryReason === "Ferie") primary = "Ferie";
-    else if (u.primaryReason === "Syk") primary = "Sykmeldt";
-    else if (u.primaryReason === "Skole") primary = "Skole";
-    else primary = "Utilgjengelig hele dagen";
+    secondary = u.primaryReason === "Ferie" || u.primaryReason === "Syk" || u.primaryReason === "Skole"
+      ? u.primaryReason
+      : "Hele dagen";
   } else if (ranges.length > 0) {
-    const timeLabel = ranges.length === 1 ? ranges[0]! : ranges.join(", ");
-    primary = `Utilgjengelig ${timeLabel}`;
+    secondary = ranges.length === 1 ? ranges[0]! : ranges.join(", ");
   } else if (reasonStr) {
-    primary = reasonStr;
-  } else {
-    primary = "Utilgjengelig";
+    secondary = reasonStr;
   }
 
-  const secondary = !u.blocksWholeDay && reasonStr && !primary.includes(reasonStr) ? reasonStr : noteStr;
+  if (noteStr && secondary && !secondary.includes(noteStr)) {
+    secondary = `${secondary} · ${noteStr}`;
+  } else if (noteStr && !secondary) {
+    secondary = noteStr;
+  }
 
   const tooltipParts: string[] = [];
   if (reasonStr) tooltipParts.push(reasonStr);
@@ -224,7 +226,7 @@ export function EmployeeRow({
             id={cellId(employee.id, day)}
             disabled={dropDisabled}
             className={cn(
-              "min-h-[64px] px-2.5 py-2.5",
+              "min-h-[56px] px-1.5 py-1.5",
               u.blocksWholeDay && "opacity-70",
               dayCellClassName(day),
             )}
@@ -245,7 +247,7 @@ export function EmployeeRow({
               }}
             >
               {cellShifts.length > 0 ? (
-                <div className="flex shrink-0 flex-col gap-1.5">
+                <div className="flex w-full min-w-0 shrink-0 flex-col gap-1">
                   {cellShifts.map((s) => (
                     <DraggableShiftChip
                       key={s.id}
@@ -264,21 +266,21 @@ export function EmployeeRow({
               {unavailableBadge ? (
                 <div
                   className={cn(
-                    "w-full",
-                    cellShifts.length > 0 ? "mt-1.5 shrink-0" : "flex min-h-[2rem] flex-1 flex-col justify-center",
+                    "w-full min-w-0",
+                    cellShifts.length > 0 ? "mt-1 shrink-0" : "flex min-h-[1.75rem] flex-1 flex-col justify-center",
                   )}
                 >
                   <div
                     title={unavailableBadge.tooltip}
                     className={cn(
-                      "mx-auto w-full max-w-[11rem] rounded-lg px-1.5 py-1 text-center shadow-none",
+                      "w-full max-w-full rounded-md px-1 py-0.5 text-center shadow-none",
                       unavailableBadge.style.container,
                       cellShifts.length === 0 && "self-center",
                     )}
                   >
                     <div
                       className={cn(
-                        "text-[10.5px] font-semibold leading-tight tracking-tight",
+                        "truncate text-[9px] font-semibold leading-tight tracking-tight",
                         unavailabilityPrimaryTextClass(unavailableBadge.style),
                       )}
                     >
@@ -287,7 +289,7 @@ export function EmployeeRow({
                     {unavailableBadge.secondary ? (
                       <div
                         className={cn(
-                          "mt-0.5 truncate text-[9px] font-normal leading-tight",
+                          "truncate text-[8.5px] font-medium leading-tight",
                           unavailabilitySecondaryTextClass(unavailableBadge.style),
                         )}
                       >
