@@ -5,6 +5,15 @@ import type { ShiftlySettings } from "@/app/lib/settings";
 
 export type StaffingStatus = "ok" | "understaffed";
 
+export type StaffingLevel = "understaffed" | "ok" | "overstaffed";
+
+export function getStaffingLevel(planned: number, required: number): StaffingLevel {
+  if (required <= 0) return "ok";
+  if (planned < required) return "understaffed";
+  if (planned > required) return "overstaffed";
+  return "ok";
+}
+
 export function getRequiredStaffForDay(store: RetailStore | null | undefined, dayIndex: number, settings: ShiftlySettings) {
   const minFallback = Math.max(0, Number(settings.minStaffPerOpenDay ?? 0));
 
@@ -20,7 +29,8 @@ export function getRequiredStaffForDay(store: RetailStore | null | undefined, da
 export function getStaffingStatusForDay(shifts: Shift[], store: RetailStore | null | undefined, dayIndex: number, settings: ShiftlySettings) {
   const planned = shifts.filter((s) => s.day === dayIndex).length;
   const required = getRequiredStaffForDay(store, dayIndex, settings);
-  const status: StaffingStatus = planned < required ? "understaffed" : "ok";
-  return { planned, required, status };
+  const level = getStaffingLevel(planned, required);
+  const status: StaffingStatus = level === "understaffed" ? "understaffed" : "ok";
+  return { planned, required, status, level };
 }
 

@@ -71,13 +71,25 @@ export function employeeUnavailableWholeCalendarDay(employee: Employee, week: nu
   return false;
 }
 
+export type UnavailabilityEntry = {
+  reason: string;
+  wholeDay: boolean;
+  startTime?: string;
+  endTime?: string;
+  note?: string;
+  isRecurring?: boolean;
+};
+
 export type EmployeeDayUnavailableDisplay = {
   /** Blocks drag / empty-cell suggest (whole day off). */
   blocksWholeDay: boolean;
-  /** Show grey “Ikke tilgjengelig” chip for this calendar day. */
+  /** Show unavailable chip for this calendar day. */
   showUnavailableChip: boolean;
   /** Optional details to show under the chip (time windows / reason). */
   details: string[];
+  entries: UnavailabilityEntry[];
+  /** Dominant reason for chip coloring. */
+  primaryReason: string;
 };
 
 /** Planlegg grid: when to show unavailable chip and when the cell is fully blocked. */
@@ -85,32 +97,60 @@ export function getEmployeeDayUnavailableDisplay(employee: Employee, week: numbe
   const iso = isoDateForShiftWeekDay(week, day);
   const blocksWholeDay = employeeUnavailableWholeCalendarDay(employee, week, day);
   const details: string[] = [];
+  const entries: UnavailabilityEntry[] = [];
 
   const periodsOnDay = (employee.unavailablePeriods ?? []).filter((p) => periodCoversIso(p, iso));
   for (const p of periodsOnDay) {
     const reason = String(p.reason ?? "").trim();
+    const wholeDay = !periodHasTimeWindow(p);
+    const note = p.note?.trim() || undefined;
+    entries.push({
+      reason: reason || "Annet",
+      wholeDay,
+      startTime: p.startTime,
+      endTime: p.endTime,
+      note,
+      isRecurring: false,
+    });
     if (periodHasTimeWindow(p)) {
       const t = `${p.startTime}–${p.endTime}`;
       details.push(reason ? `${t} · ${reason}` : t);
     } else if (reason) {
       details.push(reason);
     }
+    if (note) details.push(note);
   }
 
   const recurringOnDay = (employee.recurringUnavailablePeriods ?? []).filter((p) => recurringCoversDay(p, iso, day));
   for (const p of recurringOnDay) {
-    const reason = String(p.reason ?? "").trim();
+    const reason = String(p.reason ?? "").trim() || "Skole";
+    const wholeDay = !recurringHasTimeWindow(p);
+    const note = p.note?.trim() || undefined;
+    entries.push({
+      reason,
+      wholeDay,
+      startTime: p.startTime,
+      endTime: p.endTime,
+      note,
+      isRecurring: true,
+    });
     if (recurringHasTimeWindow(p)) {
       const t = `${p.startTime}–${p.endTime}`;
       details.push(reason ? `${t} · ${reason}` : t);
     } else if (reason) {
       details.push(reason);
     }
+    if (note) details.push(note);
   }
 
   const showUnavailableChip = blocksWholeDay || periodsOnDay.length > 0 || recurringOnDay.length > 0;
   const uniq = [...new Set(details.filter(Boolean))];
-  return { blocksWholeDay, showUnavailableChip, details: uniq };
+  const primaryReason =
+    entries.find((e) => e.wholeDay)?.reason ??
+    entries[0]?.reason ??
+    (blocksWholeDay ? "Annet" : "");
+
+  return { blocksWholeDay, showUnavailableChip, details: uniq, entries, primaryReason };
 }
 
 /** Blocks working shifts: weekday off, whole-day period, or timed period overlapping the shift. */

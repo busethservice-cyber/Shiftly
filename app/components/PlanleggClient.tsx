@@ -25,7 +25,7 @@ import { getToday, getWeekStart, isSameDay } from "@/app/lib/dateUtils";
 import { currentWeekOffset, weekOffsetFromDate, weekStartDateFromOffset } from "@/app/lib/weekDate";
 import { cn } from "@/app/lib/cn";
 import { getContractStatus, getPlannedHoursForEmployee } from "@/app/lib/rules/contracts";
-import { getRequiredStaffForDay } from "@/app/lib/rules/staffing";
+import { getRequiredStaffForDay, getStaffingLevel, getStaffingStatusForDay } from "@/app/lib/rules/staffing";
 import { activeStores } from "@/app/lib/storeUtils";
 import {
   canAssignShift,
@@ -223,6 +223,27 @@ export function PlanleggClient() {
 
   const employeesView = computed.employeesView;
   const shiftsView = computed.shiftsView;
+
+  const staffingByDay = useMemo(() => {
+    const weekShifts = computed.weekShiftsAll;
+    return days.map((_, dayIndex) => {
+      if (isAlleStoresMode) {
+        let required = 0;
+        for (const store of storesActive) {
+          required += getRequiredStaffForDay(store, dayIndex, settings);
+        }
+        const planned = weekShifts.filter((s) => s.day === dayIndex && shiftDurationHours(s) > 0).length;
+        if (required <= 0) return null;
+        return getStaffingLevel(planned, required);
+      }
+      if (!selectedStore) return null;
+      const storeShifts = weekShifts.filter((s) => s.storeId === selectedStore.id);
+      const dayShifts = storeShifts.filter((s) => s.day === dayIndex && shiftDurationHours(s) > 0);
+      const { required, level } = getStaffingStatusForDay(dayShifts, selectedStore, dayIndex, settings);
+      if (required <= 0) return null;
+      return level;
+    });
+  }, [computed.weekShiftsAll, days, isAlleStoresMode, selectedStore, settings, storesActive]);
 
   const selectedEmployee = useMemo(
     () => (selectedEmployeeId ? employees.find((e) => e.id === selectedEmployeeId) ?? null : null),
@@ -567,6 +588,7 @@ export function PlanleggClient() {
             employees={employeesView}
             shifts={shiftsView}
             conflictShiftIds={conflictShiftIds}
+            staffingByDay={staffingByDay}
             suggestionsEnabled={!isAlleStoresMode && Boolean(selectedStoreUuid)}
             dragEnabled={!isAlleStoresMode}
             onRequireStoreSelection={requireStoreForEditing}

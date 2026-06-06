@@ -3,6 +3,11 @@
 import type { EmployeeComputed, Shift } from "@/app/lib/types";
 import { isShiftOff } from "@/app/lib/hours";
 import { getEmployeeDayUnavailableDisplay, type EmployeeDayUnavailableDisplay } from "@/app/lib/rules/shifts";
+import {
+  getUnavailabilityChipStyle,
+  unavailabilityPrimaryTextClass,
+  unavailabilitySecondaryTextClass,
+} from "@/app/lib/unavailabilityColors";
 import { cn } from "@/app/lib/cn";
 import { DraggableShiftChip } from "@/app/components/DraggableShiftChip";
 import { DroppableDayCell, cellId } from "@/app/components/DroppableDayCell";
@@ -38,26 +43,60 @@ function parseUnavailableDetailLine(line: string): { range: string | null; reaso
   return { range: null, reason: trimmed || null };
 }
 
-function unavailableBadgeCopy(u: EmployeeDayUnavailableDisplay): { primary: string; secondary: string | null } {
+function unavailableBadgeCopy(u: EmployeeDayUnavailableDisplay): {
+  primary: string;
+  secondary: string | null;
+  tooltip: string;
+  style: ReturnType<typeof getUnavailabilityChipStyle>;
+} {
+  const primaryEntry = u.entries[0];
+  const style = getUnavailabilityChipStyle({
+    reason: u.primaryReason || primaryEntry?.reason,
+    wholeDay: u.blocksWholeDay || Boolean(primaryEntry?.wholeDay),
+    isRecurring: primaryEntry?.isRecurring,
+  });
+
   const parsed = u.details.map(parseUnavailableDetailLine);
   const ranges = parsed.map((p) => p.range).filter((r): r is string => Boolean(r));
   const reasons = new Set<string>();
+  const notes = new Set<string>();
+  for (const e of u.entries) {
+    if (e.reason) reasons.add(e.reason);
+    if (e.note) notes.add(e.note);
+  }
   for (const p of parsed) {
     if (p.reason) reasons.add(p.reason);
   }
   const reasonStr = reasons.size > 0 ? [...reasons].join(" · ") : null;
+  const noteStr = notes.size > 0 ? [...notes].join(" · ") : null;
 
-  if (u.blocksWholeDay) {
-    return { primary: "Utilgjengelig hele dagen", secondary: reasonStr };
-  }
-  if (ranges.length > 0) {
+  let primary: string;
+  if (u.blocksWholeDay || (primaryEntry?.wholeDay ?? false)) {
+    if (u.primaryReason === "Ferie") primary = "Ferie";
+    else if (u.primaryReason === "Syk") primary = "Sykmeldt";
+    else if (u.primaryReason === "Skole") primary = "Skole";
+    else primary = "Utilgjengelig hele dagen";
+  } else if (ranges.length > 0) {
     const timeLabel = ranges.length === 1 ? ranges[0]! : ranges.join(", ");
-    return { primary: `Utilgjengelig ${timeLabel}`, secondary: reasonStr };
+    primary = `Utilgjengelig ${timeLabel}`;
+  } else if (reasonStr) {
+    primary = reasonStr;
+  } else {
+    primary = "Utilgjengelig";
   }
-  if (reasonStr) {
-    return { primary: "Utilgjengelig hele dagen", secondary: reasonStr };
+
+  const secondary = !u.blocksWholeDay && reasonStr && !primary.includes(reasonStr) ? reasonStr : noteStr;
+
+  const tooltipParts: string[] = [];
+  if (reasonStr) tooltipParts.push(reasonStr);
+  if (ranges.length > 0) tooltipParts.push(ranges.join(", "));
+  else if (primaryEntry?.startTime && primaryEntry?.endTime) {
+    tooltipParts.push(`${primaryEntry.startTime}–${primaryEntry.endTime}`);
   }
-  return { primary: "Utilgjengelig", secondary: null };
+  if (noteStr) tooltipParts.push(noteStr);
+  const tooltip = tooltipParts.filter(Boolean).join(" · ") || primary;
+
+  return { primary, secondary, tooltip, style };
 }
 
 function Avatar({ name, gradient }: { name: string; gradient: string }) {
@@ -223,14 +262,30 @@ export function EmployeeRow({
                   )}
                 >
                   <div
+                    title={unavailableBadge.tooltip}
                     className={cn(
-                      "mx-auto w-full max-w-[11rem] rounded-lg border border-slate-200/70 bg-gradient-to-b from-slate-50/90 to-indigo-50/35 px-1.5 py-1 text-center shadow-none",
+                      "mx-auto w-full max-w-[11rem] rounded-lg px-1.5 py-1 text-center shadow-none",
+                      unavailableBadge.style.container,
                       cellShifts.length === 0 && "self-center",
                     )}
                   >
-                    <div className="text-[10.5px] font-medium leading-tight tracking-tight text-slate-500">{unavailableBadge.primary}</div>
+                    <div
+                      className={cn(
+                        "text-[10.5px] font-semibold leading-tight tracking-tight",
+                        unavailabilityPrimaryTextClass(unavailableBadge.style),
+                      )}
+                    >
+                      {unavailableBadge.primary}
+                    </div>
                     {unavailableBadge.secondary ? (
-                      <div className="mt-0.5 truncate text-[9px] font-normal leading-tight text-slate-400">{unavailableBadge.secondary}</div>
+                      <div
+                        className={cn(
+                          "mt-0.5 truncate text-[9px] font-normal leading-tight",
+                          unavailabilitySecondaryTextClass(unavailableBadge.style),
+                        )}
+                      >
+                        {unavailableBadge.secondary}
+                      </div>
                     ) : null}
                   </div>
                 </div>

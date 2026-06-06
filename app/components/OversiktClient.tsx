@@ -28,17 +28,12 @@ import { formatWeekLabel, getWeekStart } from "@/app/lib/dateUtils";
 import { getContractStatus, getPlannedHoursForEmployee } from "@/app/lib/rules/contracts";
 import { getStaffingStatusForDay } from "@/app/lib/rules/staffing";
 import type { ContractStatus } from "@/app/lib/rules/contracts";
-
-function countAvailabilityConflicts(scopedShifts: Shift[], employees: Employee[]): number {
-  const byId = new Map(employees.map((e) => [e.id, e] as const));
-  let c = 0;
-  for (const s of scopedShifts) {
-    if (s.store === "Fri" || !s.startTime || !s.endTime) continue;
-    const e = byId.get(s.employeeId);
-    if (e?.unavailableDays.includes(s.day)) c++;
-  }
-  return c;
-}
+import {
+  absenceTypeBadgeClass,
+  buildUpcomingAbsences,
+  countEmployeesOnVacationThisWeek,
+  countEmployeesSickThisWeek,
+} from "@/app/lib/absenceOverview";
 
 function alertRank(s: AlertItem["severity"]) {
   if (s === "critical") return 0;
@@ -153,10 +148,19 @@ export function OversiktClient() {
 
   const daysUnderStaffed = useMemo(() => staffingByDay.filter((d) => d.gap > 0).length, [staffingByDay]);
 
-  const conflictCount = useMemo(
-    () => countAvailabilityConflicts(scopedShifts, employees),
-    [scopedShifts, employees],
+  const activeEmployeeCount = scopedEmployees.length;
+
+  const vacationCount = useMemo(
+    () => countEmployeesOnVacationThisWeek(scopedEmployees, weekOffset),
+    [scopedEmployees, weekOffset],
   );
+
+  const sickCount = useMemo(
+    () => countEmployeesSickThisWeek(scopedEmployees, weekOffset),
+    [scopedEmployees, weekOffset],
+  );
+
+  const upcomingAbsences = useMemo(() => buildUpcomingAbsences(scopedEmployees, 12), [scopedEmployees]);
 
   const nearEmployees = useMemo(() => {
     return reportRows
@@ -242,39 +246,96 @@ export function OversiktClient() {
             reportStoreOptions={storeOptions}
           />
 
-          <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             {[
+              {
+                title: "Ansatte",
+                value: String(activeEmployeeCount),
+                hint: "Aktive i valgt område",
+              },
+              {
+                title: "På ferie",
+                value: String(vacationCount),
+                hint: "Denne uken",
+              },
+              {
+                title: "Sykmeldte",
+                value: String(sickCount),
+                hint: "Denne uken",
+              },
               {
                 title: "Planlagte timer",
                 value: `${formatHours(totalPlannedHours)} t`,
-                hint: "Valgt uke og butikkfilter",
+                hint: "Valgt uke og butikk",
               },
               {
-                title: "Ansatte over kontrakt",
+                title: "Over kontrakt",
                 value: String(overContractCount),
-                hint: "Basert på plan vs kontrakt",
+                hint: "Plan vs kontrakt",
               },
               {
-                title: "Manglende bemanning",
-                value: `${daysUnderStaffed} dag${daysUnderStaffed === 1 ? "" : "er"}`,
+                title: "Underbemannede dager",
+                value: String(daysUnderStaffed),
                 hint: "Under minstekrav",
-              },
-              {
-                title: "Utilgjengelige ansatte",
-                value: String(conflictCount),
-                hint: "Vakter på utilgjengelige dager",
               },
             ].map((c) => (
               <div
                 key={c.title}
-                className="rounded-3xl bg-white/80 p-6 shadow-[0_20px_44px_rgba(15,23,42,0.07)] ring-1 ring-slate-900/[0.04] backdrop-blur"
+                className="rounded-3xl bg-white/80 p-5 shadow-[0_20px_44px_rgba(15,23,42,0.07)] ring-1 ring-slate-900/[0.04] backdrop-blur"
               >
-                <div className="text-[12.5px] font-semibold uppercase tracking-wide text-slate-500">{c.title}</div>
-                <div className="mt-3 text-[28px] font-semibold tracking-tight text-slate-900">{c.value}</div>
-                <div className="mt-2 text-[12.5px] font-medium text-slate-500">{c.hint}</div>
+                <div className="text-[11.5px] font-semibold uppercase tracking-wide text-slate-500">{c.title}</div>
+                <div className="mt-2.5 text-[26px] font-semibold tracking-tight text-slate-900">{c.value}</div>
+                <div className="mt-1.5 text-[11.5px] font-medium text-slate-500">{c.hint}</div>
               </div>
             ))}
           </div>
+
+          <section className="rounded-3xl bg-white/80 p-6 shadow-[0_20px_44px_rgba(15,23,42,0.07)] ring-1 ring-slate-900/[0.04] backdrop-blur">
+            <h2 className="text-[17px] font-semibold text-slate-900">Kommende fravær</h2>
+            <p className="mt-1 text-[13px] font-medium text-slate-500">Aktive og kommende utilgjengelighet.</p>
+            <ul className="mt-5 space-y-2.5">
+              {upcomingAbsences.map((row) => (
+                <li
+                  key={row.id}
+                  className={cn(
+                    "flex flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-3 ring-1 ring-slate-900/[0.04]",
+                    row.isActive ? "bg-violet-50/50 ring-violet-100/80" : "bg-[#F6F8FC]/90",
+                  )}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[13px] font-semibold text-slate-900">{row.employeeName}</span>
+                      <span
+                        className={cn(
+                          "rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold ring-1",
+                          absenceTypeBadgeClass(row.type),
+                        )}
+                      >
+                        {row.type}
+                      </span>
+                      {row.isActive ? (
+                        <span className="rounded-full bg-violet-600 px-2 py-0.5 text-[10px] font-semibold text-white">
+                          Aktiv
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="mt-1 text-[12px] font-medium text-slate-600">{row.whenLabel}</div>
+                    {row.timeLabel ? (
+                      <div className="mt-0.5 text-[11.5px] font-medium text-sky-800">{row.timeLabel}</div>
+                    ) : null}
+                    {row.note ? (
+                      <div className="mt-0.5 truncate text-[11px] text-slate-500">{row.note}</div>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+              {upcomingAbsences.length === 0 ? (
+                <li className="rounded-2xl bg-slate-50/80 px-4 py-3 text-[13px] font-medium text-slate-600 ring-1 ring-slate-900/[0.04]">
+                  Ingen registrert fravær fremover.
+                </li>
+              ) : null}
+            </ul>
+          </section>
 
           <section className="rounded-3xl bg-white/80 p-6 shadow-[0_20px_44px_rgba(15,23,42,0.07)] ring-1 ring-slate-900/[0.04] backdrop-blur">
             <h2 className="text-[17px] font-semibold text-slate-900">Denne uken</h2>
