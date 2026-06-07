@@ -1,9 +1,13 @@
 "use client";
 
 import type { Employee, Shift } from "@/app/lib/types";
-import { addDays, dayShort } from "@/app/lib/mockData";
-import { formatHours, isShiftOff, shiftDurationHours } from "@/app/lib/hours";
-import { getEmployeeDayUnavailableDisplay } from "@/app/lib/rules/shifts";
+import { formatHours, shiftDurationHours } from "@/app/lib/hours";
+import {
+  employeeNameColumnWidthPx,
+  formatScheduleDayCell,
+  getScheduleWeekData,
+  type ScheduleWeekData,
+} from "@/app/lib/scheduleWeekData";
 
 export type ScheduleExportModel = {
   storeName: string;
@@ -38,77 +42,13 @@ function formatExportTimestamp(d = new Date()): string {
   return `Eksportert: ${dd}.${mm}.${yyyy} ${hh}:${min}`;
 }
 
-function dayHeaderLabel(dayIndex: number, weekStart: Date, weekOffset: number): string {
-  const d = addDays(weekStart, weekOffset * 7 + dayIndex);
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${dayShort[dayIndex]} ${dd}.${mm}`;
+function formatCellHtml(text: string): string {
+  if (!text) return "";
+  return escapeHtml(text).replaceAll("\n", "<br/>");
 }
 
-function exportClockToken(t: string): string {
-  const [hRaw, mRaw] = t.split(":");
-  const h = Number(hRaw);
-  const m = Number(mRaw);
-  if (!Number.isFinite(h) || !Number.isFinite(m)) return t.trim();
-  if (m === 0) return String(h).padStart(2, "0");
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
-
-function exportTimeRange(start: string, end: string): string {
-  return `${exportClockToken(start)}-${exportClockToken(end)}`;
-}
-
-function formatExportAbsenceCell(employee: Employee, weekOffset: number, dayIndex: number): string {
-  const u = getEmployeeDayUnavailableDisplay(employee, weekOffset, dayIndex);
-  if (!u.showUnavailableChip) return "";
-
-  const reason = (u.primaryReason || u.entries[0]?.reason || "").trim();
-  const wholeDay = u.blocksWholeDay || Boolean(u.entries[0]?.wholeDay);
-
-  if (reason === "Fri" && wholeDay) return "Fri";
-  if (wholeDay) return reason || "Utilgjengelig";
-
-  const entry = u.entries.find((e) => e.startTime && e.endTime) ?? u.entries[0];
-  if (entry?.startTime && entry?.endTime) {
-    const range = exportTimeRange(entry.startTime, entry.endTime);
-    return reason ? `${reason} ${range}` : range;
-  }
-  return reason || "Utilgjengelig";
-}
-
-function formatExportDayCell(employee: Employee, dayIndex: number, dayShifts: Shift[], weekOffset: number): string {
-  const working = dayShifts
-    .filter((s) => shiftDurationHours(s) > 0)
-    .sort((a, b) => String(a.startTime).localeCompare(String(b.startTime)));
-  if (working.length > 0) {
-    return working.map((s) => `${s.startTime}-${s.endTime}`).join(" / ");
-  }
-
-  const off = dayShifts.some((s) => isShiftOff(s));
-  if (off) return "Fri";
-
-  return formatExportAbsenceCell(employee, weekOffset, dayIndex);
-}
-
-function employeeNameColumnWidthPx(rows: ScheduleExportModel["rows"]): number {
-  const longest = rows.reduce((max, r) => Math.max(max, r.employeeName.length), "Ansatt".length);
-  return Math.min(320, Math.max(120, longest * 8 + 24));
-}
-
-export function buildScheduleExportModel(args: {
-  storeName: string;
-  weekLabel: string;
-  weekStart: Date;
-  weekOffset: number;
-  employees: Employee[];
-  shifts: Shift[];
-}): ScheduleExportModel {
-  const { storeName, weekLabel, weekStart, weekOffset, employees, shifts } = args;
-
-  const days = dayShort.map((_, idx) => ({
-    dayIndex: idx,
-    label: dayHeaderLabel(idx, weekStart, weekOffset),
-  }));
+export function buildScheduleExportModelFromWeekData(data: ScheduleWeekData): ScheduleExportModel {
+  const { storeName, weekLabel, weekOffset, employees, shifts, days, totalPlannedHours } = data;
 
   const byEmployee = new Map<string, Shift[]>();
   for (const s of shifts) {
@@ -122,14 +62,63 @@ export function buildScheduleExportModel(args: {
       const list = byEmployee.get(e.id) ?? [];
       const cells = days.map((d) => {
         const dayShifts = list.filter((s) => s.day === d.dayIndex);
-        return formatExportDayCell(e, d.dayIndex, dayShifts, weekOffset);
+        return formatScheduleDayCell(e, d.dayIndex, dayShifts, weekOffset);
       });
-      const totalHours = list.reduce((acc, s) => acc + shiftDurationHours(s), 0);
-      return { employeeId: e.id, employeeName: e.name, cells, totalHours };
+      const rowHours = data.plannedHoursByEmployee.get(e.id) ?? 0;
+      return { employeeId: e.id, employeeName: e.name, cells, totalHours: rowHours };
     })
     .sort((a, b) => a.employeeName.localeCompare(b.employeeName, "nb"));
 
-  const totalPlannedHours = shifts.reduce((acc, s) => acc + shiftDurationHours(s), 0);
+  return {
+    storeName,
+    weekLabel,
+    exportedAt: formatExportTimestamp(),
+    days: days.map((d) => ({ dayIndex: d.dayIndex, label: d.label })),
+    rows,
+    summary: { totalPlannedHours },
+  };
+}
+
+/** Legacy wrapper — prefer buildScheduleExportModelForScope. */
+export function buildScheduleExportModel(args: {
+  storeName: string;
+  weekLabel: string;
+  weekStart: Date;
+  weekOffset: number;
+  employees: Employee[];
+  shifts: Shift[];
+  totalPlannedHours?: number;
+}): ScheduleExportModel {
+  const { storeName, weekLabel, weekOffset, employees, shifts } = args;
+
+  const days = Array.from({ length: 7 }, (_, idx) => {
+    const d = new Date(args.weekStart);
+    d.setDate(d.getDate() + weekOffset * 7 + idx);
+    const short = ["Man", "Tir", "Ons", "Tor", "Fre", "Lør", "Søn"][idx] ?? `D${idx}`;
+    return { dayIndex: idx, label: `${short} ${d.getDate()}` };
+  });
+
+  const byEmployee = new Map<string, Shift[]>();
+  for (const s of shifts) {
+    const list = byEmployee.get(s.employeeId) ?? [];
+    list.push(s);
+    byEmployee.set(s.employeeId, list);
+  }
+
+  const rows = employees
+    .map((e) => {
+      const list = byEmployee.get(e.id) ?? [];
+      const cells = days.map((d) => {
+        const dayShifts = list.filter((s) => s.day === d.dayIndex);
+        return formatScheduleDayCell(e, d.dayIndex, dayShifts, weekOffset);
+      });
+      const rowHours = list.reduce((acc, s) => acc + shiftDurationHours(s), 0);
+      return { employeeId: e.id, employeeName: e.name, cells, totalHours: rowHours };
+    })
+    .sort((a, b) => a.employeeName.localeCompare(b.employeeName, "nb"));
+
+  const totalPlannedHours =
+    args.totalPlannedHours ?? shifts.reduce((acc, s) => acc + shiftDurationHours(s), 0);
 
   return {
     storeName,
@@ -141,20 +130,27 @@ export function buildScheduleExportModel(args: {
   };
 }
 
+export function buildScheduleExportModelForScope(args: Parameters<typeof getScheduleWeekData>[0]): ScheduleExportModel {
+  return buildScheduleExportModelFromWeekData(getScheduleWeekData(args));
+}
+
 function buildExcelHtml(model: ScheduleExportModel): string {
-  const nameWidth = employeeNameColumnWidthPx(model.rows);
+  const nameWidth = employeeNameColumnWidthPx(model.rows.map((r) => r.employeeName));
+  const dayColWidth = 84;
+  const hoursColWidth = 64;
+  const colCount = model.days.length + 2;
 
   const headerRows = `
-    <tr><td colspan="${model.days.length + 2}" class="meta-title"><strong>${escapeHtml(model.storeName)} – Ukeplan</strong></td></tr>
-    <tr><td colspan="${model.days.length + 2}" class="meta">Butikk: ${escapeHtml(model.storeName)}</td></tr>
-    <tr><td colspan="${model.days.length + 2}" class="meta">Uke: ${escapeHtml(model.weekLabel)}</td></tr>
-    <tr><td colspan="${model.days.length + 2}" class="meta">Totalt planlagte timer: ${escapeHtml(formatHours(model.summary.totalPlannedHours))} t</td></tr>
-    <tr><td colspan="${model.days.length + 2}" class="meta">${escapeHtml(model.exportedAt)}</td></tr>
-    <tr><td colspan="${model.days.length + 2}" class="spacer"></td></tr>
+    <tr><td colspan="${colCount}" class="meta-title"><strong>${escapeHtml(model.storeName)} – Ukeplan</strong></td></tr>
+    <tr><td colspan="${colCount}" class="meta">Butikk: ${escapeHtml(model.storeName)}</td></tr>
+    <tr><td colspan="${colCount}" class="meta">Uke: ${escapeHtml(model.weekLabel)}</td></tr>
+    <tr><td colspan="${colCount}" class="meta">Totalt planlagte timer: ${escapeHtml(formatHours(model.summary.totalPlannedHours))} t</td></tr>
+    <tr><td colspan="${colCount}" class="meta">${escapeHtml(model.exportedAt)}</td></tr>
+    <tr><td colspan="${colCount}" class="spacer"></td></tr>
   `;
 
   const tableHead = `
-    <tr>
+    <tr class="header-row">
       <th class="name-col">Ansatt</th>
       ${model.days.map((d) => `<th class="day-col">${escapeHtml(d.label)}</th>`).join("")}
       <th class="hours-col">Timer</th>
@@ -166,7 +162,7 @@ function buildExcelHtml(model: ScheduleExportModel): string {
       (r) => `
     <tr>
       <td class="name-col">${escapeHtml(r.employeeName)}</td>
-      ${r.cells.map((c) => `<td class="day-col">${c ? escapeHtml(c) : ""}</td>`).join("")}
+      ${r.cells.map((c) => `<td class="day-col">${formatCellHtml(c)}</td>`).join("")}
       <td class="hours-col">${escapeHtml(formatHours(r.totalHours))}</td>
     </tr>`,
     )
@@ -193,6 +189,16 @@ function buildExcelHtml(model: ScheduleExportModel): string {
             <x:FitToPage/>
             <x:FitWidth>1</x:FitWidth>
             <x:FitHeight>0</x:FitHeight>
+            <x:Print>
+              <x:ValidPrinterInfo/>
+              <x:HorizontalResolution>600</x:HorizontalResolution>
+              <x:VerticalResolution>600</x:VerticalResolution>
+            </x:Print>
+            <x:FreezePanes/>
+            <x:FrozenNoSplit/>
+            <x:SplitHorizontal>6</x:SplitHorizontal>
+            <x:TopRowBottomPane>6</x:TopRowBottomPane>
+            <x:ActivePane>2</x:ActivePane>
           </x:WorksheetOptions>
         </x:ExcelWorksheet>
       </x:ExcelWorksheets>
@@ -201,25 +207,27 @@ function buildExcelHtml(model: ScheduleExportModel): string {
   <style>
     table { border-collapse: collapse; width: 100%; table-layout: fixed; }
     th, td {
-      border: 1px solid #94a3b8;
+      border: 1px solid #64748b;
       padding: 6px 8px;
       font-size: 11pt;
       font-family: Calibri, Arial, sans-serif;
       vertical-align: middle;
       word-wrap: break-word;
+      mso-number-format: "\\@";
     }
-    th { background: #f1f5f9; font-weight: 700; text-align: center; }
+    th { background: #e2e8f0; font-weight: 700; text-align: center; }
+    .header-row th { background: #cbd5e1; }
     .name-col {
       width: ${nameWidth}px;
       min-width: ${nameWidth}px;
       text-align: left;
       white-space: nowrap;
     }
-    .day-col { text-align: center; width: 72px; }
-    .hours-col { text-align: center; width: 56px; }
-    .meta-title { border: none; font-size: 14pt; padding: 4px 0; }
-    .meta { border: none; color: #475569; font-size: 10pt; padding: 2px 0; }
-    .spacer { border: none; height: 8px; }
+    .day-col { text-align: center; width: ${dayColWidth}px; min-width: ${dayColWidth}px; white-space: normal; }
+    .hours-col { text-align: center; width: ${hoursColWidth}px; min-width: ${hoursColWidth}px; }
+    .meta-title { border: none !important; font-size: 14pt; padding: 4px 0; }
+    .meta { border: none !important; color: #475569; font-size: 10pt; padding: 2px 0; }
+    .spacer { border: none !important; height: 8px; }
     @media print {
       @page { size: landscape; margin: 10mm; }
       body { margin: 0; }
@@ -253,7 +261,7 @@ export function openSchedulePrintPreview(model: ScheduleExportModel) {
   const w = window.open("", "_blank", "noopener,noreferrer");
   if (!w) return;
 
-  const nameWidth = employeeNameColumnWidthPx(model.rows);
+  const nameWidth = employeeNameColumnWidthPx(model.rows.map((r) => r.employeeName));
 
   const css = `
     @page { size: landscape; margin: 10mm; }
@@ -262,11 +270,11 @@ export function openSchedulePrintPreview(model: ScheduleExportModel) {
     h1 { font-size: 18px; margin: 0 0 4px; }
     .meta { color: #475569; font-size: 12px; line-height: 1.5; }
     table { width: 100%; border-collapse: collapse; margin-top: 14px; table-layout: fixed; }
-    th, td { border: 1px solid #94a3b8; padding: 6px 8px; font-size: 11px; vertical-align: middle; word-wrap: break-word; }
-    th { background: #f1f5f9; text-align: center; font-weight: 700; }
+    th, td { border: 1px solid #64748b; padding: 6px 8px; font-size: 11px; vertical-align: middle; word-wrap: break-word; }
+    th { background: #cbd5e1; text-align: center; font-weight: 700; }
     .name-col { width: ${nameWidth}px; text-align: left; white-space: nowrap; }
-    .day-col { text-align: center; }
-    .hours-col { text-align: center; width: 56px; }
+    .day-col { text-align: center; white-space: pre-line; }
+    .hours-col { text-align: center; width: 64px; }
     @media print {
       body { margin: 0; }
       .no-print { display: none; }
@@ -310,7 +318,7 @@ export function openSchedulePrintPreview(model: ScheduleExportModel) {
             (r) => `
           <tr>
             <td class="name-col">${escapeHtml(r.employeeName)}</td>
-            ${r.cells.map((c) => `<td class="day-col">${c ? escapeHtml(c) : ""}</td>`).join("")}
+            ${r.cells.map((c) => `<td class="day-col">${formatCellHtml(c)}</td>`).join("")}
             <td class="hours-col">${escapeHtml(formatHours(r.totalHours))}</td>
           </tr>`,
           )

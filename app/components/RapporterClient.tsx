@@ -2,11 +2,8 @@
 
 import { useMemo, useState } from "react";
 import type { Employee, ReportTabId } from "@/app/lib/types";
-import {
-  employeesInScope,
-  shiftsInScope,
-  siteKeyFromStore,
-} from "@/app/lib/dashboardScope";
+import { getScheduleWeekData } from "@/app/lib/scheduleWeekData";
+import { buildScheduleExportModelFromWeekData, downloadScheduleCsv, openSchedulePrintPreview } from "@/app/lib/exportSchedule";
 import { Sidebar } from "@/app/components/Sidebar";
 import { TopBar } from "@/app/components/TopBar";
 import { AlertsPanel } from "@/app/components/AlertsPanel";
@@ -23,7 +20,6 @@ import {
 } from "@/app/lib/hours";
 import { cn } from "@/app/lib/cn";
 import { useAlerts } from "@/app/components/AlertsProvider";
-import { buildScheduleExportModel, downloadScheduleCsv, openSchedulePrintPreview } from "@/app/lib/exportSchedule";
 import { addWeeks, formatWeekLabel, getToday, getWeekStart } from "@/app/lib/dateUtils";
 import { getContractStatus, getPlannedHoursForEmployee } from "@/app/lib/rules/contracts";
 import { getStaffingStatusForDay } from "@/app/lib/rules/staffing";
@@ -81,13 +77,21 @@ export function RapporterClient() {
     [storeId, stores],
   );
 
-  const siteKey = siteKeyFromStore(selectedRetail);
+  const scheduleData = useMemo(
+    () =>
+      getScheduleWeekData({
+        employees,
+        shifts,
+        stores,
+        weekOffset,
+        selectedStoreId: storeId,
+      }),
+    [employees, shifts, stores, weekOffset, storeId],
+  );
 
-  // Alerts are sourced from the shared AlertsProvider (activeAlerts/alertCount).
-
-  const weekShiftsAll = useMemo(() => shifts.filter((s) => s.week === weekOffset), [shifts, weekOffset]);
-  const scopedShifts = useMemo(() => shiftsInScope(weekShiftsAll, siteKey), [weekShiftsAll, siteKey]);
-  const scopedEmployees = useMemo(() => employeesInScope(employees, siteKey), [employees, siteKey]);
+  const scopedShifts = scheduleData.shifts;
+  const scopedEmployees = scheduleData.employees;
+  const totalPlannedHours = scheduleData.totalPlannedHours;
 
   const reportRows = useMemo(() => {
     return scopedEmployees.map((e) => {
@@ -106,12 +110,7 @@ export function RapporterClient() {
     });
   }, [scopedEmployees, scopedShifts, settings]);
 
-  const totalPlannedHours = useMemo(
-    () => round1(scopedShifts.reduce((acc, s) => acc + shiftDurationHours(s), 0)),
-    [scopedShifts],
-  );
-
-  const overContractCount = useMemo(() => reportRows.filter((r) => r.status === "over").length, [reportRows]);
+  const exportModel = useMemo(() => buildScheduleExportModelFromWeekData(scheduleData), [scheduleData]);
 
   const staffingByDay = useMemo(() => {
     return days.map((d) => {
@@ -142,17 +141,7 @@ export function RapporterClient() {
     [stores],
   );
 
-  const exportModel = useMemo(() => {
-    const storeName = selectedRetail?.name ?? (storeId === "alle" ? "Alle butikker" : "Butikk");
-    return buildScheduleExportModel({
-      storeName,
-      weekLabel,
-      weekStart: getWeekStart(baseWeekStart),
-      weekOffset,
-      employees: scopedEmployees,
-      shifts: scopedShifts,
-    });
-  }, [scopedEmployees, scopedShifts, selectedRetail, storeId, weekLabel, weekOffset]);
+  const overContractCount = useMemo(() => reportRows.filter((r) => r.status === "over").length, [reportRows]);
 
   return (
     <div className="min-h-screen w-full">

@@ -21,7 +21,8 @@ import { CopyShiftModal } from "@/app/components/CopyShiftModal";
 import { PlannerDayActionsModal } from "@/app/components/PlannerDayActionsModal";
 import { ShiftContextMenu } from "@/app/components/ShiftContextMenu";
 import { PlannerToolbar } from "@/app/components/PlannerToolbar";
-import { buildScheduleExportModel, downloadScheduleCsv, openSchedulePrintPreview } from "@/app/lib/exportSchedule";
+import { buildScheduleExportModelFromWeekData, downloadScheduleCsv, openSchedulePrintPreview } from "@/app/lib/exportSchedule";
+import { getScheduleWeekData } from "@/app/lib/scheduleWeekData";
 import { useWorkforce } from "@/app/components/WorkforceProvider";
 import { useStores } from "@/app/components/StoresProvider";
 import { useSettings } from "@/app/components/SettingsProvider";
@@ -195,20 +196,22 @@ export function PlanleggClient() {
     return { startTime: t?.startTime ?? "10:00", endTime: t?.endTime ?? "17:00" };
   }, [settings.shiftTemplates]);
 
-  const computed = useMemo(() => {
-    const weekShiftsAll = shifts.filter((s) => s.week === weekOffset);
-    const visibleWeekShifts =
-      selectedStoreId === "alle"
-        ? weekShiftsAll
-        : weekShiftsAll.filter((s) => !isShiftOff(s) && s.storeId === selectedStoreId);
+  const scheduleData = useMemo(
+    () =>
+      getScheduleWeekData({
+        employees,
+        shifts,
+        stores,
+        weekOffset,
+        selectedStoreId: selectedStoreId,
+      }),
+    [employees, shifts, stores, weekOffset, selectedStoreId],
+  );
 
-    const employeesForGrid =
-      selectedStoreId === "alle"
-        ? employees
-        : employees.filter((e) => {
-            const ids = e.storeIds ?? [];
-            return ids.includes(selectedStoreId) || e.primaryStoreId === selectedStoreId;
-          });
+  const computed = useMemo(() => {
+    const weekShiftsAll = scheduleData.weekShiftsAll;
+    const visibleWeekShifts = scheduleData.shifts;
+    const employeesForGrid = scheduleData.employees;
 
     const employeesView: EmployeeComputed[] = employeesForGrid.map((e) => {
       // Contract status/totals are GLOBAL across stores.
@@ -235,7 +238,7 @@ export function PlanleggClient() {
     }));
 
     return { employeesView, shiftsView, weekShiftsVisible: visibleWeekShifts, weekShiftsAll };
-  }, [employees, shifts, selectedStoreId, settings, weekOffset]);
+  }, [employees, scheduleData, settings]);
 
   const employeesView = computed.employeesView;
   const shiftsView = computed.shiftsView;
@@ -304,20 +307,7 @@ export function PlanleggClient() {
     [activeAlerts],
   );
 
-  const exportModel = useMemo(() => {
-    const storeName =
-      selectedStoreId === "alle"
-        ? "Alle butikker"
-        : stores.find((s) => s.id === selectedStoreId)?.name ?? "Butikk";
-    return buildScheduleExportModel({
-      storeName,
-      weekLabel,
-      weekStart: baseWeekStart,
-      weekOffset,
-      employees: employeesView,
-      shifts: computed.weekShiftsVisible,
-    });
-  }, [computed.weekShiftsVisible, employeesView, selectedStoreId, stores, weekLabel, weekOffset]);
+  const exportModel = useMemo(() => buildScheduleExportModelFromWeekData(scheduleData), [scheduleData]);
 
   function runWithAssignCheck(employee: Employee, shift: Shift, weekShifts: Shift[], onProceed: () => void) {
     const check = canAssignShift({ employee, shift, shifts: weekShifts, settings, stores });

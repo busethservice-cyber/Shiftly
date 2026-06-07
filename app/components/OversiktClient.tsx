@@ -10,14 +10,10 @@ import { AlertsPanel } from "@/app/components/AlertsPanel";
 import { useWorkforce } from "@/app/components/WorkforceProvider";
 import { useStores } from "@/app/components/StoresProvider";
 import { useSettings } from "@/app/components/SettingsProvider";
-import {
-  employeesInScope,
-  shiftsInScope,
-  siteKeyFromStore,
-} from "@/app/lib/dashboardScope";
+import { getScheduleWeekData } from "@/app/lib/scheduleWeekData";
+import { buildScheduleExportModelFromWeekData, openSchedulePrintPreview } from "@/app/lib/exportSchedule";
 import { addDays, baseWeekStart, dayShort, formatNorDate, monthsShort } from "@/app/lib/mockData";
 import { formatHours, round1, shiftDurationHours, sumEmployeeWeekHours } from "@/app/lib/hours";
-import { buildScheduleExportModel, openSchedulePrintPreview } from "@/app/lib/exportSchedule";
 import { cn } from "@/app/lib/cn";
 import { useAlerts } from "@/app/components/AlertsProvider";
 import { CalendarPlus, ChevronRight, Download, Store, UserPlus } from "lucide-react";
@@ -96,35 +92,28 @@ export function OversiktClient() {
     [storeId, stores],
   );
 
-  const siteKey = siteKeyFromStore(selectedRetail);
+  const scheduleData = useMemo(
+    () =>
+      getScheduleWeekData({
+        employees,
+        shifts,
+        stores,
+        weekOffset,
+        selectedStoreId: storeId,
+      }),
+    [employees, shifts, stores, weekOffset, storeId],
+  );
 
-  const weekShiftsAll = useMemo(() => shifts.filter((s) => s.week === weekOffset), [shifts, weekOffset]);
-  const scopedShifts = useMemo(() => shiftsInScope(weekShiftsAll, siteKey), [weekShiftsAll, siteKey]);
-  const scopedEmployees = useMemo(() => employeesInScope(employees, siteKey), [employees, siteKey]);
-
-  // Alerts are sourced from the shared AlertsProvider (activeAlerts/alertCount).
+  const scopedShifts = scheduleData.shifts;
+  const scopedEmployees = scheduleData.employees;
+  const totalPlannedHours = scheduleData.totalPlannedHours;
 
   const topAlerts = useMemo(
     () => [...activeAlerts].sort((a, b) => alertRank(a.severity) - alertRank(b.severity)).slice(0, 5),
     [activeAlerts],
   );
 
-  const totalPlannedHours = useMemo(
-    () => round1(scopedShifts.reduce((acc, s) => acc + shiftDurationHours(s), 0)),
-    [scopedShifts],
-  );
-
-  const exportModel = useMemo(() => {
-    const storeName = selectedRetail?.name ?? (storeId === "alle" ? "Alle butikker" : "Butikk");
-    return buildScheduleExportModel({
-      storeName,
-      weekLabel,
-      weekStart: baseWeekStart,
-      weekOffset,
-      employees: scopedEmployees,
-      shifts: scopedShifts,
-    });
-  }, [scopedEmployees, scopedShifts, selectedRetail, storeId, weekLabel, weekOffset]);
+  const exportModel = useMemo(() => buildScheduleExportModelFromWeekData(scheduleData), [scheduleData]);
 
   const reportRows = useMemo(() => {
     return scopedEmployees.map((e) => {
