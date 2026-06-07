@@ -26,9 +26,7 @@ import { getStaffingStatusForDay } from "@/app/lib/rules/staffing";
 import type { ContractStatus } from "@/app/lib/rules/contracts";
 import {
   absenceTypeBadgeClass,
-  buildUpcomingAbsences,
-  countEmployeesOnVacationThisWeek,
-  countEmployeesSickThisWeek,
+  getWeeklyAbsenceOverview,
 } from "@/app/lib/absenceOverview";
 
 function alertRank(s: AlertItem["severity"]) {
@@ -138,17 +136,14 @@ export function OversiktClient() {
 
   const activeEmployeeCount = scopedEmployees.length;
 
-  const vacationCount = useMemo(
-    () => countEmployeesOnVacationThisWeek(scopedEmployees, weekOffset),
+  const weeklyAbsence = useMemo(
+    () => getWeeklyAbsenceOverview(scopedEmployees, weekOffset, 12),
     [scopedEmployees, weekOffset],
   );
 
-  const sickCount = useMemo(
-    () => countEmployeesSickThisWeek(scopedEmployees, weekOffset),
-    [scopedEmployees, weekOffset],
-  );
-
-  const upcomingAbsences = useMemo(() => buildUpcomingAbsences(scopedEmployees, 12), [scopedEmployees]);
+  const absenceCount = weeklyAbsence.absenceEmployeeCount;
+  const sickCount = weeklyAbsence.sickEmployeeCount;
+  const upcomingAbsences = weeklyAbsence.rows;
 
   const nearEmployees = useMemo(() => {
     return reportRows
@@ -198,8 +193,8 @@ export function OversiktClient() {
                 hint: "Aktive i valgt område",
               },
               {
-                title: "På ferie",
-                value: String(vacationCount),
+                title: "Fravær",
+                value: String(absenceCount),
                 hint: "Denne uken",
               },
               {
@@ -236,7 +231,7 @@ export function OversiktClient() {
 
           <section className="rounded-3xl bg-white/80 p-6 shadow-[0_20px_44px_rgba(15,23,42,0.07)] ring-1 ring-slate-900/[0.04] backdrop-blur">
             <h2 className="text-[17px] font-semibold text-slate-900">Kommende fravær</h2>
-            <p className="mt-1 text-[13px] font-medium text-slate-500">Aktive og kommende utilgjengelighet.</p>
+            <p className="mt-1 text-[13px] font-medium text-slate-500">Fravær i valgt uke.</p>
             <ul className="mt-5 space-y-2.5">
               {upcomingAbsences.map((row) => (
                 <li
@@ -275,7 +270,7 @@ export function OversiktClient() {
               ))}
               {upcomingAbsences.length === 0 ? (
                 <li className="rounded-2xl bg-slate-50/80 px-4 py-3 text-[13px] font-medium text-slate-600 ring-1 ring-slate-900/[0.04]">
-                  Ingen registrert fravær fremover.
+                  Ingen registrert fravær denne uken.
                 </li>
               ) : null}
             </ul>

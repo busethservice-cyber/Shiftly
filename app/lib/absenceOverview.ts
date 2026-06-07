@@ -1,4 +1,4 @@
-import type { Employee, RecurringUnavailablePeriod, UnavailablePeriod, UnavailablePeriodReason } from "@/app/lib/types";
+import type { Employee, RecurringUnavailablePeriod, UnavailablePeriod } from "@/app/lib/types";
 import { addDays, baseWeekStart, dayShort } from "@/app/lib/mockData";
 import { isoFromDate, todayLocal } from "@/app/lib/weekDate";
 
@@ -85,34 +85,155 @@ function recurringActiveToday(p: RecurringUnavailablePeriod, todayIso: string, w
   return recurringCoversWeekDay(p, todayIso, weekday);
 }
 
-/** Employees with Ferie overlapping the selected week (scoped list, unique by id). */
-export function countEmployeesOnVacationThisWeek(employees: Employee[], weekOffset: number): number {
+
+export type WeeklyAbsenceOverview = {
+  absenceEmployeeCount: number;
+  sickEmployeeCount: number;
+  rows: UpcomingAbsenceRow[];
+};
+
+/** Absence KPI + list for a selected week; read-only. */
+export function getWeeklyAbsenceOverview(employees: Employee[], weekOffset: number, limit = 12): WeeklyAbsenceOverview {
   const { start, end } = weekIsoRange(weekOffset);
-  const ids = new Set<string>();
+  const todayIso = isoFromDate(todayLocal());
+  const absenceIds = new Set<string>();
+  const sickIds = new Set<string>();
+  const rows: UpcomingAbsenceRow[] = [];
+
   for (const e of employees) {
-    for (const p of e.unavailablePeriods ?? []) {
-      if (normalizeReason(p.reason) !== "Ferie") continue;
-      if (periodOverlapsWeek(p, start, end)) ids.add(e.id);
+    let employeeHasAbsence = false;
+
+    for (const day of e.unavailableDays ?? []) {
+      employeeHasAbsence = true;
+      rows.push(buildWeekdayBlockRow(e, day, weekOffset, todayIso));
     }
+
+    for (const p of e.unavailablePeriods ?? []) {
+      if (!periodOverlapsWeek(p, start, end)) continue;
+      employeeHasAbsence = true;
+      if (normalizeReason(p.reason) === "Syk") sickIds.add(e.id);
+      rows.push(buildPeriodRowForWeek(e, p, start, end, todayIso));
+    }
+
+    for (const rp of e.recurringUnavailablePeriods ?? []) {
+      if (!recurringOverlapsWeek(rp, weekOffset)) continue;
+      employeeHasAbsence = true;
+      if (normalizeReason(rp.reason) === "Syk") sickIds.add(e.id);
+      rows.push(buildRecurringRowForWeek(e, rp, weekOffset, todayIso));
+    }
+
+    if (employeeHasAbsence) absenceIds.add(e.id);
   }
-  return ids.size;
+
+  return {
+    absenceEmployeeCount: absenceIds.size,
+    sickEmployeeCount: sickIds.size,
+    rows: sortAbsenceRows(rows).slice(0, limit),
+  };
+}
+
+/** Employees with any absence/unavailability overlapping the selected week (unique by id). */
+export function countEmployeesWithAbsenceThisWeek(employees: Employee[], weekOffset: number): number {
+  return getWeeklyAbsenceOverview(employees, weekOffset).absenceEmployeeCount;
 }
 
 /** Employees with Syk overlapping the selected week. */
 export function countEmployeesSickThisWeek(employees: Employee[], weekOffset: number): number {
-  const { start, end } = weekIsoRange(weekOffset);
-  const ids = new Set<string>();
-  for (const e of employees) {
-    for (const p of e.unavailablePeriods ?? []) {
-      if (normalizeReason(p.reason) !== "Syk") continue;
-      if (periodOverlapsWeek(p, start, end)) ids.add(e.id);
-    }
-    for (const rp of e.recurringUnavailablePeriods ?? []) {
-      if (normalizeReason(rp.reason) !== "Syk") continue;
-      if (recurringOverlapsWeek(rp, weekOffset)) ids.add(e.id);
-    }
-  }
-  return ids.size;
+  return getWeeklyAbsenceOverview(employees, weekOffset).sickEmployeeCount;
+}
+
+function buildWeekdayBlockRow(e: Employee, weekday: number, weekOffset: number, todayIso: string): UpcomingAbsenceRow {
+  const weekdayLabel = dayShort[weekday] ?? "Ukedag";
+  const weekStart = addDays(baseWeekStart, weekOffset * 7);
+  const dayDate = addDays(weekStart, weekday);
+  const dayIso = isoFromDate(dayDate);
+  const active = dayIso === todayIso;
+
+  return {
+    id: `weekday-${e.id}-${weekday}`,
+    employeeId: e.id,
+    employeeName: e.name,
+    type: "Fri",
+    whenLabel: `Hver ${weekdayLabel.toLowerCase()}`,
+    timeLabel: null,
+    note: null,
+    sortRank: active ? 0 : 1,
+    sortKey: dayIso,
+    isActive: active,
+  };
+}
+
+function buildPeriodRowForWeek(
+  e: Employee,
+  p: UnavailablePeriod,
+  weekStart: string,
+  weekEnd: string,
+  todayIso: string,
+): UpcomingAbsenceRow {
+  const partial = hasPartialWindow(p.startTime, p.endTime);
+  const active = periodActiveToday(p, todayIso);
+  const type = normalizeReason(p.reason);
+  const clipStart = p.startDate < weekStart ? weekStart : p.startDate;
+  const clipEnd = p.endDate > weekEnd ? weekEnd : p.endDate;
+  return {
+    id: `period-${e.id}-${p.id}`,
+    employeeId: e.id,
+    employeeName: e.name,
+    type,
+    whenLabel: formatDateRange(clipStart, clipEnd),
+    timeLabel: partial ? `${p.startTime}–${p.endTime}` : null,
+    note: p.note?.trim() || null,
+    sortRank: active ? 0 : 1,
+    sortKey: clipStart,
+    isActive: active,
+  };
+}
+
+function buildRecurringRowForWeek(
+  e: Employee,
+  p: RecurringUnavailablePeriod,
+  weekOffset: number,
+  todayIso: string,
+): UpcomingAbsenceRow {
+  const partial = hasPartialWindow(p.startTime, p.endTime);
+  const weekdayLabel = dayShort[p.weekday] ?? "Ukedag";
+  const from = String(p.validFrom ?? "").trim();
+  const to = String(p.validTo ?? "").trim();
+  let whenLabel = `Hver ${weekdayLabel.toLowerCase()}`;
+  if (from && to) whenLabel = `${whenLabel} · ${formatDateRange(from, to)}`;
+  else if (from) whenLabel = `${whenLabel} · fra ${formatNorDateShort(from)}`;
+  else if (to) whenLabel = `${whenLabel} · til ${formatNorDateShort(to)}`;
+
+  const weekStart = addDays(baseWeekStart, weekOffset * 7);
+  const dayDate = addDays(weekStart, p.weekday);
+  const dayIso = isoFromDate(dayDate);
+
+  const todayWeekday = (() => {
+    const d = todayLocal();
+    const js = d.getDay();
+    return js === 0 ? 6 : js - 1;
+  })();
+  const active = recurringActiveToday(p, todayIso, todayWeekday) && dayIso >= todayIso;
+
+  return {
+    id: `recurring-${e.id}-${p.id}`,
+    employeeId: e.id,
+    employeeName: e.name,
+    type: normalizeReason(p.reason),
+    whenLabel,
+    timeLabel: partial ? `${p.startTime}–${p.endTime}` : null,
+    note: p.note?.trim() || null,
+    sortRank: active ? 0 : 1,
+    sortKey: dayIso,
+    isActive: active,
+  };
+}
+
+function sortAbsenceRows(rows: UpcomingAbsenceRow[]): UpcomingAbsenceRow[] {
+  return rows.sort((a, b) => {
+    if (a.sortRank !== b.sortRank) return a.sortRank - b.sortRank;
+    return a.sortKey.localeCompare(b.sortKey);
+  });
 }
 
 function buildPeriodRow(e: Employee, p: UnavailablePeriod, todayIso: string): UpcomingAbsenceRow {
@@ -164,8 +285,12 @@ function buildRecurringRow(e: Employee, p: RecurringUnavailablePeriod, todayIso:
   };
 }
 
-/** Upcoming and active absences for dashboard; read-only. */
-export function buildUpcomingAbsences(employees: Employee[], limit = 12): UpcomingAbsenceRow[] {
+/** Upcoming absences; pass weekOffset for week-scoped dashboard list. */
+export function buildUpcomingAbsences(employees: Employee[], limit = 12, weekOffset?: number): UpcomingAbsenceRow[] {
+  if (typeof weekOffset === "number") {
+    return getWeeklyAbsenceOverview(employees, weekOffset, limit).rows;
+  }
+
   const todayIso = isoFromDate(todayLocal());
   const rows: UpcomingAbsenceRow[] = [];
 
