@@ -22,7 +22,7 @@ import { cn } from "@/app/lib/cn";
 import { useAlerts } from "@/app/components/AlertsProvider";
 import { CalendarPlus, ChevronRight, Download, Store, UserPlus } from "lucide-react";
 import { useRequests } from "@/app/components/RequestsProvider";
-import { makeId } from "@/app/lib/mockData";
+import { EmployeeRequestsSection } from "@/app/components/EmployeeRequestsSection";
 import { currentWeekOffset, isoFromDate, todayLocal, weekOffsetFromDate, weekStartDateFromOffset } from "@/app/lib/weekDate";
 import { formatWeekLabel, getWeekStart } from "@/app/lib/dateUtils";
 import { getContractStatus, getPlannedHoursForEmployee } from "@/app/lib/rules/contracts";
@@ -66,11 +66,11 @@ function contractLabel(status: ShiftStatus | ContractStatus) {
 }
 
 export function OversiktClient() {
-  const { employees, shifts, setEmployees, setShifts } = useWorkforce();
+  const { employees, shifts } = useWorkforce();
   const { stores } = useStores();
   const { settings } = useSettings();
   const { activeAlerts, alertCount, alertsHydrated } = useAlerts();
-  const { requests, setRequests } = useRequests();
+  const { requests, pendingCount, approveRequest, rejectRequest, isMutating } = useRequests();
 
   const [weekOffset, setWeekOffset] = useState(() => currentWeekOffset());
   const [storeId, setStoreId] = useState<string>("alle");
@@ -173,51 +173,7 @@ export function OversiktClient() {
     [stores],
   );
 
-  const pendingRequests = useMemo(() => requests.filter((r) => r.status === "pending"), [requests]);
-
-  const employeeById = useMemo(() => new Map(employees.map((e) => [e.id, e] as const)), [employees]);
-
-  function approveRequest(id: string) {
-    const req = requests.find((r) => r.id === id) ?? null;
-    if (!req || req.status !== "pending") return;
-
-    setRequests((prev) => prev.map((r) => (r.id === id ? { ...r, status: "approved" } : r)));
-
-    if (req.type === "bytt_vakt") return; // placeholder
-
-    // Add unavailability + remove shifts that match the approved date for this employee.
-    setShifts((prev) =>
-      prev.filter((s) => {
-        if (s.employeeId !== req.employeeId) return true;
-        const d = addDays(baseWeekStart, s.week * 7 + s.day);
-        const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-        return iso !== req.date;
-      }),
-    );
-
-    setEmployees((prev) =>
-      prev.map((e) => {
-        if (e.id !== req.employeeId) return e;
-        const reason = req.type === "meld_sykdom" ? "Syk" : "Fri";
-        const period = { id: makeId(), startDate: req.date, endDate: req.date, reason } as const;
-        const nextBadges = new Set(e.badges);
-        if (reason === "Syk") nextBadges.add("Syk");
-        if (reason === "Fri") nextBadges.add("Fri");
-        nextBadges.delete("Tilgjengelig");
-        return {
-          ...e,
-          unavailablePeriods: [...(e.unavailablePeriods ?? []), period],
-          badges: Array.from(nextBadges) as typeof e.badges,
-        };
-      }),
-    );
-  }
-
-  function rejectRequest(id: string) {
-    setRequests((prev) =>
-      prev.map((r) => (r.id === id && r.status === "pending" ? { ...r, status: "rejected" } : r)),
-    );
-  }
+  const employeeById = useMemo(() => new Map(employees.map((e) => [e.id, e.name] as const)), [employees]);
 
   return (
     <div className="min-h-screen w-full">
@@ -233,7 +189,7 @@ export function OversiktClient() {
           <TopBar
             mode="overview"
             title="Oversikt"
-            alertsCount={alertCount}
+            alertsCount={alertCount + pendingCount}
             onBellClick={(rect) => {
               setAlertsAnchorRect(rect);
               setIsAlertsOpen((v) => !v);
@@ -495,88 +451,15 @@ export function OversiktClient() {
             </div>
           </section>
 
-          <section className="rounded-3xl bg-white/80 p-6 shadow-[0_20px_44px_rgba(15,23,42,0.07)] ring-1 ring-slate-900/[0.04] backdrop-blur">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <h2 className="text-[17px] font-semibold text-slate-900">Forespørsler</h2>
-                <p className="mt-1 text-[13px] font-medium text-slate-500">Forespørsler fra ansatte.</p>
-              </div>
-              <div className="rounded-full bg-violet-50 px-3 py-1 text-[12px] font-semibold text-violet-800 ring-1 ring-violet-100">
-                {pendingRequests.length} pending
-              </div>
-            </div>
-
-            <div className="mt-5 space-y-3">
-              {requests
-                .slice()
-                .sort((a, b) => {
-                  const sRank = (s: typeof a.status) => (s === "pending" ? 0 : s === "approved" ? 1 : 2);
-                  const rank = sRank(a.status) - sRank(b.status);
-                  if (rank !== 0) return rank;
-                  return String(b.date).localeCompare(String(a.date));
-                })
-                .slice(0, 10)
-                .map((r) => {
-                  const emp = employeeById.get(r.employeeId);
-                  const typeLabel =
-                    r.type === "be_om_fri" ? "Be om fri" : r.type === "meld_sykdom" ? "Meld sykdom" : "Bytt vakt";
-                  const statusLabel = r.status === "pending" ? "Pending" : r.status === "approved" ? "Godkjent" : "Avslått";
-                  const statusStyles =
-                    r.status === "approved"
-                      ? "bg-emerald-50 text-emerald-800 ring-emerald-100"
-                      : r.status === "rejected"
-                        ? "bg-rose-50 text-rose-800 ring-rose-100"
-                        : "bg-white/70 text-slate-700 ring-slate-900/[0.05]";
-
-                  return (
-                    <div
-                      key={r.id}
-                      className="rounded-[28px] bg-[#F6F8FC] p-4 shadow-[0_12px_24px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.04]"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <div className="text-[13px] font-semibold text-slate-900">
-                            {typeLabel} · {emp?.name ?? "Ansatt"}
-                          </div>
-                          <div className="mt-1 text-[12.5px] font-medium text-slate-600">
-                            {r.date}
-                            {r.message ? ` · ${r.message}` : ""}
-                          </div>
-                        </div>
-                        <span className={cn("rounded-full px-3 py-1 text-[11.5px] font-semibold ring-1", statusStyles)}>
-                          {statusLabel}
-                        </span>
-                      </div>
-
-                      {r.status === "pending" ? (
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() => approveRequest(r.id)}
-                            className="rounded-2xl bg-emerald-600 px-4 py-2.5 text-[13px] font-semibold text-white shadow-[0_14px_28px_rgba(16,185,129,0.25)] hover:bg-emerald-500"
-                          >
-                            Godkjenn
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => rejectRequest(r.id)}
-                            className="rounded-2xl bg-white/80 px-4 py-2.5 text-[13px] font-semibold text-rose-700 shadow-[0_10px_22px_rgba(15,23,42,0.06)] ring-1 ring-rose-100 hover:bg-rose-50"
-                          >
-                            Avslå
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-
-              {requests.length === 0 ? (
-                <div className="rounded-[28px] bg-[#F6F8FC] p-4 text-[13px] font-semibold text-slate-600 ring-1 ring-slate-900/[0.04]">
-                  Ingen forespørsler ennå.
-                </div>
-              ) : null}
-            </div>
-          </section>
+          <EmployeeRequestsSection
+            requests={requests}
+            employeeNameById={employeeById}
+            pendingCount={pendingCount}
+            isMutating={isMutating}
+            onApprove={(id) => void approveRequest(id)}
+            onReject={(id) => void rejectRequest(id)}
+            limit={10}
+          />
         </main>
       </div>
 

@@ -20,6 +20,8 @@ import {
   shiftsInScope,
   siteKeyFromStore,
 } from "@/app/lib/dashboardScope";
+import { useRequests } from "@/app/components/RequestsProvider";
+import { EmployeeRequestsSection } from "@/app/components/EmployeeRequestsSection";
 import { AlertTriangle, Ban, CheckCircle2, Info, ShieldAlert } from "lucide-react";
 
 type FilterChip = "alle" | "contract" | "understaffed" | "unavailable" | "resolved";
@@ -61,6 +63,7 @@ export function VarslerClient() {
   const { stores } = useStores();
   const { settings } = useSettings();
   const { activeAlerts, alertCount, markAlertResolved, isResolved } = useAlerts();
+  const { requests, pendingCount, approveRequest, rejectRequest, isMutating } = useRequests();
 
   const [weekOffset, setWeekOffset] = useState(() => currentWeekOffset());
   const [storeId, setStoreId] = useState<string>("alle");
@@ -133,6 +136,8 @@ export function VarslerClient() {
     };
   }, [enriched]);
 
+  const pendingRequests = useMemo(() => requests.filter((r) => r.status === "pending"), [requests]);
+
   function onMarkResolved(id: string) {
     markAlertResolved(id);
   }
@@ -150,7 +155,7 @@ export function VarslerClient() {
           <TopBar
             mode="overview"
             title="Varsler"
-            alertsCount={alertCount}
+            alertsCount={alertCount + pendingCount}
             onBellClick={(rect) => {
               setAlertsAnchorRect(rect);
               setIsAlertsOpen((v) => !v);
@@ -161,6 +166,19 @@ export function VarslerClient() {
             onReportStoreChange={setStoreId}
             reportStoreOptions={storeOptions}
           />
+
+          {pendingRequests.length > 0 ? (
+            <div className="mt-6">
+              <EmployeeRequestsSection
+                requests={pendingRequests}
+                employeeNameById={employeeNameById}
+                pendingCount={pendingCount}
+                isMutating={isMutating}
+                onApprove={(id) => void approveRequest(id)}
+                onReject={(id) => void rejectRequest(id)}
+              />
+            </div>
+          ) : null}
 
           <section className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {[

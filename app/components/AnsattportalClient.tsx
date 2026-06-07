@@ -10,8 +10,9 @@ import { addDays, baseWeekStart, dayShort, formatNorDate } from "@/app/lib/mockD
 import { cn } from "@/app/lib/cn";
 import { shiftDurationHours } from "@/app/lib/hours";
 import { RequestModal } from "@/app/components/RequestModal";
-import { makeId } from "@/app/lib/mockData";
-import { getUserRole, signOut } from "@/app/lib/auth";
+import { getLinkedEmployeeId, getUserRole, signOut } from "@/app/lib/auth";
+import { StatusToast, useStatusToast } from "@/app/components/StatusToast";
+import { requestStatusLabel, requestTypeLabel } from "@/app/lib/requestHelpers";
 
 function statusPill(status: ShiftStatus) {
   if (status === "over_limit") return "bg-rose-50 text-rose-800 ring-rose-100";
@@ -53,10 +54,12 @@ function storeLabel(store: string) {
 export function AnsattportalClient() {
   const router = useRouter();
   const { employees, shifts } = useWorkforce();
-  const { setRequests } = useRequests();
+  const { submitRequest, requests } = useRequests();
+  const { toast, showToast } = useStatusToast();
   const [employeeId, setEmployeeId] = useState<string>(() => employees[0]?.id ?? "");
   const [requestType, setRequestType] = useState<EmployeeRequestType | null>(null);
   const [canAccessAdmin, setCanAccessAdmin] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -74,7 +77,25 @@ export function AnsattportalClient() {
     };
   }, []);
 
+  useEffect(() => {
+    let alive = true;
+    getLinkedEmployeeId()
+      .then((id) => {
+        if (!alive || !id) return;
+        setEmployeeId(id);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [employees]);
+
   const employee = useMemo(() => employees.find((e) => e.id === employeeId) ?? null, [employees, employeeId]);
+
+  const myRequests = useMemo(
+    () => requests.filter((r) => r.employeeId === employeeId).slice(0, 5),
+    [employeeId, requests],
+  );
 
   const published = useMemo(() => {
     return shifts
@@ -114,7 +135,14 @@ export function AnsattportalClient() {
             <div className="min-w-0 flex-1">
               <div className="text-[24px] font-semibold tracking-tight text-slate-900">Mine vakter</div>
               <p className="mt-2 text-[13px] font-medium text-slate-600">
-                Velg ansatt for demo. Du ser kun <span className="font-semibold text-slate-800">publiserte</span> vakter.
+                {employee ? (
+                  <>
+                    Hei, <span className="font-semibold text-slate-800">{employee.name}</span>. Du ser kun{" "}
+                    <span className="font-semibold text-slate-800">publiserte</span> vakter.
+                  </>
+                ) : (
+                  <>Du ser kun publiserte vakter.</>
+                )}
               </p>
             </div>
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
@@ -147,20 +175,22 @@ export function AnsattportalClient() {
             </div>
           </div>
 
-          <div className="mt-4">
-            <label className="text-[12px] font-semibold text-slate-600">Ansatt</label>
-            <select
-              value={employeeId}
-              onChange={(e) => setEmployeeId(e.target.value)}
-              className="mt-2 w-full rounded-2xl bg-white/90 px-4 py-2.5 text-[13.5px] font-semibold text-slate-900 shadow-[0_10px_22px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.05] focus:outline-none focus:ring-2 focus:ring-violet-200"
-            >
-              {employees.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          {canAccessAdmin ? (
+            <div className="mt-4">
+              <label className="text-[12px] font-semibold text-slate-600">Ansatt (demo)</label>
+              <select
+                value={employeeId}
+                onChange={(e) => setEmployeeId(e.target.value)}
+                className="mt-2 w-full rounded-2xl bg-white/90 px-4 py-2.5 text-[13.5px] font-semibold text-slate-900 shadow-[0_10px_22px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.05] focus:outline-none focus:ring-2 focus:ring-violet-200"
+              >
+                {employees.map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
         </header>
 
         <section className="mt-6 grid gap-3 sm:grid-cols-3">
@@ -226,9 +256,7 @@ export function AnsattportalClient() {
 
         <section className="mt-6 rounded-3xl bg-white/80 p-5 shadow-[0_20px_44px_rgba(15,23,42,0.07)] ring-1 ring-slate-900/[0.04] backdrop-blur">
           <div className="text-[16px] font-semibold text-slate-900">Ukeoversikt</div>
-          <p className="mt-1 text-[12.5px] font-medium text-slate-500">
-            Publiserte vakter per uke (mock).
-          </p>
+          <p className="mt-1 text-[12.5px] font-medium text-slate-500">Publiserte vakter per uke.</p>
 
           <div className="mt-4 space-y-5">
             {groupedByWeek.map(([week, list]) => (
@@ -270,14 +298,37 @@ export function AnsattportalClient() {
             ) : null}
           </div>
         </section>
+
+        {myRequests.length > 0 ? (
+          <section className="mt-6 rounded-3xl bg-white/80 p-5 shadow-[0_20px_44px_rgba(15,23,42,0.07)] ring-1 ring-slate-900/[0.04] backdrop-blur">
+            <div className="text-[16px] font-semibold text-slate-900">Mine forespørsler</div>
+            <div className="mt-4 space-y-2">
+              {myRequests.map((r) => (
+                <div key={r.id} className="rounded-[24px] bg-[#F6F8FC] px-4 py-3 ring-1 ring-slate-900/[0.04]">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-[13px] font-semibold text-slate-900">
+                      {requestTypeLabel(r.type)} · {r.date}
+                    </div>
+                    <span className="rounded-full bg-white px-3 py-1 text-[11.5px] font-semibold text-slate-700 ring-1 ring-slate-900/[0.06]">
+                      {requestStatusLabel(r.status)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
       </div>
 
       <RequestModal
         open={Boolean(requestType)}
         type={requestType ?? "be_om_fri"}
         availableShifts={publishedWorkShifts}
-        onClose={() => setRequestType(null)}
-        onSubmit={({ date, message, shiftId }) => {
+        isSubmitting={isSubmitting}
+        onClose={() => {
+          if (!isSubmitting) setRequestType(null);
+        }}
+        onSubmit={async ({ date, message, shiftId }) => {
           const derivedDate =
             requestType === "bytt_vakt"
               ? (() => {
@@ -288,23 +339,29 @@ export function AnsattportalClient() {
                 })()
               : date;
 
-          if (!requestType) return;
-          setRequests((prev) => [
-            ...prev,
-            {
-              id: makeId(),
+          if (!requestType || !employeeId || isSubmitting) return;
+
+          setIsSubmitting(true);
+          try {
+            await submitRequest({
               employeeId,
               type: requestType,
               shiftId,
               date: derivedDate,
               message: message.trim(),
-              status: "pending",
-            },
-          ]);
-          setRequestType(null);
+            });
+            setRequestType(null);
+            showToast("Forespørsel sendt");
+          } catch (err) {
+            console.error("[Shiftly][requests] submit failed", err);
+            showToast("Kunne ikke sende forespørsel", "negative");
+          } finally {
+            setIsSubmitting(false);
+          }
         }}
       />
+
+      <StatusToast toast={toast} />
     </div>
   );
 }
-

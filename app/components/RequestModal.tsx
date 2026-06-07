@@ -58,14 +58,16 @@ export function RequestModal({
   open,
   type,
   availableShifts,
+  isSubmitting = false,
   onClose,
   onSubmit,
 }: {
   open: boolean;
   type: EmployeeRequestType;
   availableShifts: Shift[];
+  isSubmitting?: boolean;
   onClose: () => void;
-  onSubmit: (args: { date: string; message: string; shiftId?: string }) => void;
+  onSubmit: (args: { date: string; message: string; shiftId?: string }) => void | Promise<void>;
 }) {
   const [date, setDate] = useState("");
   const [message, setMessage] = useState("");
@@ -95,10 +97,10 @@ export function RequestModal({
   }, [open, onClose]);
 
   const canSubmit = useMemo(() => {
-    if (!open) return false;
+    if (!open || isSubmitting) return false;
     if (type === "bytt_vakt") return Boolean(shiftId);
     return Boolean(date);
-  }, [open, type, shiftId, date]);
+  }, [open, type, shiftId, date, isSubmitting]);
 
   if (!open) return null;
 
@@ -117,7 +119,7 @@ export function RequestModal({
             <div className="min-w-0">
               <div className="text-[14px] font-semibold text-slate-900">{titleForType(type)}</div>
               <div className="mt-1 text-[12.5px] font-medium text-slate-600">
-                Send en forespørsel til leder (mock).
+                Send en forespørsel til leder.
               </div>
             </div>
             <button
@@ -162,19 +164,20 @@ export function RequestModal({
           <div className="mt-5 flex items-center gap-3">
             <button
               type="button"
-              onClick={() => onSubmit({ date, message, shiftId: shiftId || undefined })}
+              onClick={() => void onSubmit({ date, message, shiftId: shiftId || undefined })}
               disabled={!canSubmit}
               className={cn(
                 "flex-1 rounded-2xl bg-violet-600 px-4 py-2.5 text-[13.5px] font-semibold text-white shadow-[0_18px_36px_rgba(124,58,237,0.28)] hover:bg-violet-500",
                 !canSubmit && "opacity-50 hover:bg-violet-600",
               )}
             >
-              Send forespørsel
+              {isSubmitting ? "Sender…" : "Send forespørsel"}
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 rounded-2xl bg-white/70 px-4 py-2.5 text-[13.5px] font-semibold text-slate-700 shadow-[0_14px_30px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.05] hover:bg-white"
+              disabled={isSubmitting}
+              className="flex-1 rounded-2xl bg-white/70 px-4 py-2.5 text-[13.5px] font-semibold text-slate-700 shadow-[0_14px_30px_rgba(15,23,42,0.06)] ring-1 ring-slate-900/[0.05] hover:bg-white disabled:opacity-50"
             >
               Avbryt
             </button>

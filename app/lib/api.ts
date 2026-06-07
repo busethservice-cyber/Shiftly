@@ -10,6 +10,11 @@ import { useMockData } from "@/app/lib/runtimeConfig";
 import { getCurrentOrganizationId } from "@/app/lib/auth";
 import { normalizeEmployeeStoreAssignments } from "@/app/lib/employeeStoreMigration";
 import {
+  decodeRequestMessage,
+  encodeRequestMessage,
+  requestTypeToDb,
+} from "@/app/lib/requestHelpers";
+import {
   dbRowToRecurring,
   dbRowsToUnavailablePeriods,
   hmToDbTime,
@@ -33,6 +38,7 @@ const LS_KEYS = {
    * Shape: { [employeeId]: { storeIds: string[]; primaryStoreId: string | null } }
    */
   employeeStores: "shiftly:employeeStores",
+  requests: "shiftly:mock:requests",
 } as const;
 
 function lsReadJson<T>(key: string): T | null {
@@ -627,7 +633,7 @@ export async function upsertRecurringAvailabilityPeriods(
 }
 
 export async function getRequests(): Promise<EmployeeRequest[]> {
-  if (useMockData) return [];
+  if (useMockData) return lsReadJson<EmployeeRequest[]>(LS_KEYS.requests) ?? [];
 
   const orgId = await getCurrentOrganizationId();
   if (!orgId) throw new Error("Not authenticated");
@@ -639,18 +645,74 @@ export async function getRequests(): Promise<EmployeeRequest[]> {
   const { data, error } =
     employeeIds.length === 0
       ? { data: [], error: null }
-      : await supabase.from("requests").select("*").in("employee_id", employeeIds);
+      : await supabase.from("requests").select("*").in("employee_id", employeeIds).order("date", { ascending: false });
   if (error) throw error;
   const reqs = (data ?? []) as DbRequest[];
 
-  return reqs.map((r) => ({
-    id: r.id,
-    employeeId: r.employee_id,
-    type: requestTypeToUi(r.type),
-    date: r.date,
-    message: r.message ?? "",
-    status: requestStatusToUi(r.status),
-  }));
+  return reqs.map((r) => {
+    const decoded = decodeRequestMessage(r.message);
+    return {
+      id: r.id,
+      employeeId: r.employee_id,
+      type: requestTypeToUi(r.type),
+      date: r.date,
+      message: decoded.message,
+      shiftId: decoded.shiftId,
+      status: requestStatusToUi(r.status),
+    };
+  });
+}
+
+export async function createRequest(args: Omit<EmployeeRequest, "id" | "status">): Promise<EmployeeRequest> {
+  const next: EmployeeRequest = { id: makeId(), status: "pending", ...args };
+
+  if (useMockData) {
+    const prev = lsReadJson<EmployeeRequest[]>(LS_KEYS.requests) ?? [];
+    lsWriteJson(LS_KEYS.requests, [...prev, next]);
+    return next;
+  }
+
+  const orgId = await getCurrentOrganizationId();
+  if (!orgId) throw new Error("Not authenticated");
+
+  const supabase = getSupabaseClient();
+  const row = {
+    employee_id: args.employeeId,
+    type: requestTypeToDb(args.type),
+    date: args.date,
+    message: encodeRequestMessage(args.message, args.shiftId) || null,
+    status: "pending" as const,
+  };
+
+  const { data, error } = await supabase.from("requests").insert([row]).select("*").single();
+  if (error) throw error;
+  const saved = data as DbRequest;
+  const decoded = decodeRequestMessage(saved.message);
+
+  return {
+    id: saved.id,
+    employeeId: saved.employee_id,
+    type: requestTypeToUi(saved.type),
+    date: saved.date,
+    message: decoded.message,
+    shiftId: decoded.shiftId,
+    status: requestStatusToUi(saved.status),
+  };
+}
+
+export async function updateRequestStatus(id: string, status: DbRequest["status"]): Promise<void> {
+  if (useMockData) {
+    const prev = lsReadJson<EmployeeRequest[]>(LS_KEYS.requests) ?? [];
+    lsWriteJson(
+      LS_KEYS.requests,
+      prev.map((r) => (r.id === id ? { ...r, status } : r)),
+    );
+    return;
+  }
+
+  const supabase = getSupabaseClient();
+  const { error } = await supabase.from("requests").update({ status }).eq("id", id);
+  if (error) throw error;
 }
 
 // Convenience for seeding UI-only requests locally (still no backend routes)

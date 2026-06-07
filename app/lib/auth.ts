@@ -97,9 +97,29 @@ export async function getCurrentUser() {
 }
 
 export async function getCurrentOrganizationId() {
-  // Simplified: 1 user = 1 organization
   const user = await getCurrentUser();
   return user?.id ?? null;
+}
+
+/** Employee row linked to the signed-in user (prefers non-admin role). */
+export async function getLinkedEmployeeId(): Promise<string | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from("employees")
+    .select("id, role")
+    .eq("user_id", user.id)
+    .eq("is_active", true);
+  if (error) {
+    console.error("Failed to fetch linked employee.", error);
+    return null;
+  }
+
+  const list = data ?? [];
+  const emp = list.find((e) => e.role === "employee") ?? list[0] ?? null;
+  return emp?.id ?? null;
 }
 
 export async function getUserRole(): Promise<"admin" | "employee"> {
