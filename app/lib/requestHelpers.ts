@@ -17,6 +17,12 @@ export function requestStatusLabel(status: EmployeeRequestStatus): string {
   return "Avslått";
 }
 
+export function requestStatusBadgeClass(status: EmployeeRequestStatus): string {
+  if (status === "approved") return "bg-emerald-50 text-emerald-800 ring-emerald-100";
+  if (status === "rejected") return "bg-rose-50 text-rose-800 ring-rose-100";
+  return "bg-amber-50 text-amber-900 ring-amber-100";
+}
+
 export function requestTypeToDb(type: EmployeeRequestType): DbRequestType {
   if (type === "be_om_fri") return "fri";
   if (type === "meld_sykdom") return "syk";

@@ -7,7 +7,7 @@ import { initialEmployees, initialShifts } from "@/app/lib/mockData";
 import { initialRetailStores } from "@/app/lib/storesData";
 import { makeId, baseWeekStart, addDays } from "@/app/lib/mockData";
 import { useMockData } from "@/app/lib/runtimeConfig";
-import { getCurrentOrganizationId } from "@/app/lib/auth";
+import { getCurrentOrganizationId, getLinkedEmployeeId, getUserRole } from "@/app/lib/auth";
 import { normalizeEmployeeStoreAssignments } from "@/app/lib/employeeStoreMigration";
 import {
   decodeRequestMessage,
@@ -632,6 +632,19 @@ export async function upsertRecurringAvailabilityPeriods(
   }
 }
 
+function mapDbRequest(r: DbRequest): EmployeeRequest {
+  const decoded = decodeRequestMessage(r.message);
+  return {
+    id: r.id,
+    employeeId: r.employee_id,
+    type: requestTypeToUi(r.type),
+    date: r.date,
+    message: decoded.message,
+    shiftId: decoded.shiftId,
+    status: requestStatusToUi(r.status),
+  };
+}
+
 export async function getRequests(): Promise<EmployeeRequest[]> {
   if (useMockData) return lsReadJson<EmployeeRequest[]>(LS_KEYS.requests) ?? [];
 
@@ -647,23 +660,41 @@ export async function getRequests(): Promise<EmployeeRequest[]> {
       ? { data: [], error: null }
       : await supabase.from("requests").select("*").in("employee_id", employeeIds).order("date", { ascending: false });
   if (error) throw error;
-  const reqs = (data ?? []) as DbRequest[];
 
-  return reqs.map((r) => {
-    const decoded = decodeRequestMessage(r.message);
-    return {
-      id: r.id,
-      employeeId: r.employee_id,
-      type: requestTypeToUi(r.type),
-      date: r.date,
-      message: decoded.message,
-      shiftId: decoded.shiftId,
-      status: requestStatusToUi(r.status),
-    };
-  });
+  return ((data ?? []) as DbRequest[]).map(mapDbRequest);
+}
+
+/** Requests for the signed-in employee only (employee portal). */
+export async function getMyRequests(): Promise<EmployeeRequest[]> {
+  const linkedId = await getLinkedEmployeeId();
+  if (!linkedId) return [];
+
+  if (useMockData) {
+    const all = lsReadJson<EmployeeRequest[]>(LS_KEYS.requests) ?? [];
+    return all.filter((r) => r.employeeId === linkedId);
+  }
+
+  const orgId = await getCurrentOrganizationId();
+  if (!orgId) throw new Error("Not authenticated");
+
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from("requests")
+    .select("*")
+    .eq("employee_id", linkedId)
+    .order("date", { ascending: false });
+  if (error) throw error;
+
+  return ((data ?? []) as DbRequest[]).map(mapDbRequest);
 }
 
 export async function createRequest(args: Omit<EmployeeRequest, "id" | "status">): Promise<EmployeeRequest> {
+  const role = await getUserRole();
+  const linkedId = await getLinkedEmployeeId();
+  if (role === "employee" && linkedId && args.employeeId !== linkedId) {
+    throw new Error("Du kan bare sende forespørsler for deg selv.");
+  }
+
   const next: EmployeeRequest = { id: makeId(), status: "pending", ...args };
 
   if (useMockData) {
@@ -686,18 +717,7 @@ export async function createRequest(args: Omit<EmployeeRequest, "id" | "status">
 
   const { data, error } = await supabase.from("requests").insert([row]).select("*").single();
   if (error) throw error;
-  const saved = data as DbRequest;
-  const decoded = decodeRequestMessage(saved.message);
-
-  return {
-    id: saved.id,
-    employeeId: saved.employee_id,
-    type: requestTypeToUi(saved.type),
-    date: saved.date,
-    message: decoded.message,
-    shiftId: decoded.shiftId,
-    status: requestStatusToUi(saved.status),
-  };
+  return mapDbRequest(data as DbRequest);
 }
 
 export async function updateRequestStatus(id: string, status: DbRequest["status"]): Promise<void> {
